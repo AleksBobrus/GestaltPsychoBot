@@ -3,6 +3,7 @@
 
 import asyncio
 import os
+import sqlite3
 from dotenv import load_dotenv
 env_path = os.path.join(os.path.dirname(__file__), '.env')
 load_dotenv(dotenv_path=env_path)
@@ -21,6 +22,9 @@ from bdi_test import questions, interpret_score
 from exercises import get_random_exercise, get_random_anxiety_technique
 from crisis_detector import is_crisis_message, get_crisis_response
 
+# импорт и обработчик команды /stats
+ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -33,6 +37,11 @@ main_menu_kb = ReplyKeyboardMarkup(
         [KeyboardButton(text="💬 Поговорить"), KeyboardButton(text="📋 Пройти тест")],
         [KeyboardButton(text="ℹ️ О боте")]
     ],
+    resize_keyboard=True
+)
+# Клавиатура для режима диалога (только кнопка выхода)
+dialog_kb = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="❌ Завершить диалог")]],
     resize_keyboard=True
 )
 
@@ -86,32 +95,28 @@ async def about_bot(message: types.Message, state: FSMContext):
 async def start_talk(message: types.Message, state: FSMContext):
     await state.set_state(DialogState.waiting_for_message)
     await message.answer(
-        "Режим беседы включён. Напишите, что вас беспокоит.\nЧтобы выйти, нажмите любую другую кнопку или /start.",
+        "💬 Режим беседы включён. Напишите, что вас беспокоит.\n"
+        "Чтобы завершить диалог, нажмите кнопку ниже.",
+        reply_markup=dialog_kb # клавиатура только с кнопкой выхода
+    )
+
+@dp.message(DialogState.waiting_for_message, F.text == "❌ Завершить диалог")
+async def exit_dialog(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer(
+        "Диалог завершён. Возвращаемся в главное меню.",
         reply_markup=main_menu_kb
     )
 
 @dp.message(DialogState.waiting_for_message, F.text)
 async def process_dialog(message: types.Message, state: FSMContext):
-    # Проверка кризиса
+    # Проверка кризиса (если есть)
     if is_crisis_message(message.text):
         await message.answer(get_crisis_response(), parse_mode="Markdown", reply_markup=main_menu_kb)
         await state.clear()
         return
 
-    # Если сообщение совпадает с одной из кнопок меню – выходим из режима и обрабатываем соответствующую кнопку
-    if message.text in ["😰 Мне тревожно", "🧘 Хочу упражнение", "📋 Пройти тест", "ℹ️ О боте"]:
-        await state.clear()
-        # В зависимости от кнопки вызываем соответствующий хендлер (дублируем логику)
-        if message.text == "ℹ️ О боте":
-            await about_bot(message, state)  # state уже очищен, но функция ожидает state
-        elif message.text == "📋 Пройти тест":
-            await start_bdi_test(message, state)
-        elif message.text == "😰 Мне тревожно":
-            await send_anxiety_technique(message, state)
-        elif message.text == "🧘 Хочу упражнение":
-            await send_exercise(message, state)
-        return
-
+    # Обычное сообщение – отправляем в ИИ
     user_id = message.from_user.id
     user_text = message.text.strip()
     save_message(user_id, "user", user_text)
@@ -120,7 +125,8 @@ async def process_dialog(message: types.Message, state: FSMContext):
     await bot.send_chat_action(user_id, action="typing")
     reply = await get_ai_response(messages_for_api)
     save_message(user_id, "assistant", reply)
-    await message.answer(reply, reply_markup=main_menu_kb)
+    # Отправляем ответ с клавиатурой диалога (чтобы кнопка выхода оставалась)
+    await message.answer(reply, reply_markup=dialog_kb)
 
 # -------------------------------------------------------------------
 # ТЕСТ БЕКА
@@ -211,6 +217,44 @@ async def process_bdi_answer(message: types.Message, state: FSMContext):
         )
         await message.answer(result_text, parse_mode="Markdown", reply_markup=main_menu_kb)
         await state.clear()
+
+# Показывает статистику по тесту Бека (только для администраторов).
+@dp.message(Command("stats"))
+async def show_stats(message: types.Message):
+    """Показывает статистику по тесту Бека (только для администраторов)."""
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("⛔ У вас нет доступа к этой команде.")
+        return
+
+    conn = sqlite3.connect("database.db")
+    c = conn.cursor()
+
+    # Общее количество прошедших тест
+    c.execute("SELECT COUNT(DISTINCT user_id) FROM bdi_results")
+    total_users = c.fetchone()[0] or 0
+
+    # Средний балл
+    c.execute("SELECT AVG(score) FROM bdi_results")
+    avg_score = c.fetchone()[0] or 0
+
+    # Распределение по интерпретациям
+    c.execute("""
+        SELECT interpretation, COUNT(*) FROM bdi_results
+        GROUP BY interpretation
+    """)
+    distribution = c.fetchall()
+
+    conn.close()
+
+    # Формируем сообщение
+    text = f"📊 **Статистика теста Бека**\n\n"
+    text += f"👥 Всего прошли тест: **{total_users}**\n"
+    text += f"📈 Средний балл: **{avg_score:.1f}**\n\n"
+    text += "**Распределение:**\n"
+    for interp, count in distribution:
+        text += f"• {interp}: {count} чел.\n"
+
+    await message.answer(text, parse_mode="Markdown")
 
 # -------------------------------------------------------------------
 # Упрожнения
