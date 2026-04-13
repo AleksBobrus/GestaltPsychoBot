@@ -1,5 +1,6 @@
 # bot.py – первая версия бота-психолога с новым меню.
-# Все кнопки пока заглушки, функционал будем добавлять постепенно.
+# Этот файл запускает бота, содержит главную клавиатуру и заглушки для нереализованных кнопок.
+# Все обработчики для кнопки "Поговорить" вынесены в отдельный модуль handlers/dialog_handlers.py.
 
 # -------------------------------------------------------------------
 # ИМПОРТЫ
@@ -32,10 +33,13 @@ from aiogram import F
 # Command – фильтр для команд (например, Command("start")).
 from aiogram.filters import Command
 
-# ReplyKeyboardMarkup, KeyboardButton – классы для создания обычных (reply) кнопок.
-# ReplyKeyboardMarkup – клавиатура с кнопками, которые появляются вместо поля ввода.
-# KeyboardButton – одна кнопка на такой клавиатуре.
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.fsm.context import FSMContext          # <--- добавили
+
+# Импортируем клавиатуру из отдельного файла
+from keyboards import main_menu_kb
+
+# Импортируем регистратор из модуля диалога (чтобы подключить обработчики "Поговорить")
+from handlers.dialog_handlers import register_dialog_handlers
 
 
 # -------------------------------------------------------------------
@@ -43,65 +47,62 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 # -------------------------------------------------------------------
 load_dotenv()                     # читаем .env
 BOT_TOKEN = os.getenv("BOT_TOKEN")   # получаем токен бота из переменной окружения
-
 # -------------------------------------------------------------------
 # ИНИЦИАЛИЗАЦИЯ БОТА И ДИСПЕТЧЕРА
 # -------------------------------------------------------------------
-bot = Bot(token=BOT_TOKEN)        # создаём объект бота
-dp = Dispatcher()                 # создаём диспетчер (принимает и маршрутизирует сообщения)
+bot = Bot(token=BOT_TOKEN)          # создаём объект бота
+dp = Dispatcher()                   # создаём диспетчер (принимает и маршрутизирует сообщения)
 
-# -------------------------------------------------------------------
-# КЛАВИАТУРА ГЛАВНОГО МЕНЮ
-# -------------------------------------------------------------------
-# Создаём клавиатуру с пятью кнопками.
-# resize_keyboard=True – Telegram автоматически подгонит размер.
-main_menu_kb = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="💬 Поговорить"), KeyboardButton(text="🌱 Заземлиться")],
-        [KeyboardButton(text="📋 Пройти тест"), KeyboardButton(text="👤 Личный кабинет")],
-        [KeyboardButton(text="ℹ️ О боте")]
-    ],
-    resize_keyboard=True
-)
 
 # -------------------------------------------------------------------
 # ОБРАБОТЧИК КОМАНДЫ /start
 # -------------------------------------------------------------------
 @dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    """Приветствие и показ главного меню."""
+async def cmd_start(message: types.Message, state:FSMContext):  # <-- добавили state
+    """
+    Вызывается при отправке пользователем команды /start.
+        - Очищает любое активное состояние FSM (на случай, если бот был в диалоге).
+        - Отправляет приветствие и показывает главное меню.
+    """
+    await state.clear()  # сброс состояния (выход из возможного диалога или теста)
     await message.answer(
         "🌟 Добро пожаловать в психологического помощника!\n\n"
         "Выберите действие на кнопках ниже.",
-        reply_markup=main_menu_kb
+        reply_markup=main_menu_kb   # показываем главную клавиатуру
     )
 
 # -------------------------------------------------------------------
 # ЗАГЛУШКИ ДЛЯ ВСЕХ КНОПОК (временные ответы)
 # -------------------------------------------------------------------
+# Каждая такая функция очищает состояние (если пользователь переключился с другой кнопки)
+# и выдаёт сообщение о том, что функция в разработке.
 
-@dp.message(F.text == "💬 Поговорить")
-async def placeholder_talk(message: types.Message):
-    """Заглушка для кнопки 'Поговорить'."""
-    await message.answer("🛠 Функция «Поговорить» будет добавлена в ближайшее время.", reply_markup=main_menu_kb)
+#@dp.message(F.text == "💬 Поговорить")
+#async def placeholder_talk(message: types.Message):
+#    """Заглушка для кнопки 'Поговорить'."""
+#    await message.answer("🛠 Функция «Поговорить» будет добавлена в ближайшее время.", reply_markup=main_menu_kb)
 
 @dp.message(F.text == "🌱 Заземлиться")
-async def placeholder_grounding(message: types.Message):
+async def placeholder_grounding(message: types.Message, state: FSMContext): # <-- добавили state
+    await state.clear()
     """Заглушка для кнопки 'Заземлиться'."""
     await message.answer("🛠 Техники заземления появятся позже.", reply_markup=main_menu_kb)
 
 @dp.message(F.text == "📋 Пройти тест")
-async def placeholder_test(message: types.Message):
+async def placeholder_test(message: types.Message, state: FSMContext):  # <-- добавили state
+    await state.clear()
     """Заглушка для кнопки 'Пройти тест'."""
     await message.answer("🛠 Тест Бека будет доступен в следующей версии.", reply_markup=main_menu_kb)
 
 @dp.message(F.text == "👤 Личный кабинет")
-async def placeholder_profile(message: types.Message):
+async def placeholder_profile(message: types.Message, state: FSMContext):    # <-- добавили state
+    await state.clear()
     """Заглушка для кнопки 'Личный кабинет'."""
     await message.answer("🛠 Личный кабинет в разработке.", reply_markup=main_menu_kb)
 
 @dp.message(F.text == "ℹ️ О боте")
-async def about_bot(message: types.Message):
+async def about_bot(message: types.Message, state: FSMContext): # <-- добавили state
+    await state.clear()
     """Информация о боте (не заглушка, а реальное описание)."""
     await message.answer(
         "🤖 **Психологический помощник**\n\n"
@@ -114,6 +115,13 @@ async def about_bot(message: types.Message):
         parse_mode="Markdown",
         reply_markup=main_menu_kb
     )
+
+# -------------------------------------------------------------------
+# ПОДКЛЮЧЕНИЕ ОБРАБОТЧИКОВ ИЗ ДРУГИХ МОДУЛЕЙ
+# -------------------------------------------------------------------
+# Регистрируем все хендлеры, определённые в файле handlers/dialog_handlers.py
+# (кнопка "Поговорить", режим диалога, кнопка выхода и временная заглушка).
+register_dialog_handlers(dp)
 
 # -------------------------------------------------------------------
 # ЗАПУСК БОТА
