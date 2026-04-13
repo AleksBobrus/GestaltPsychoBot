@@ -77,11 +77,6 @@ async def cmd_start(message: types.Message, state:FSMContext):  # <-- добав
 # Каждая такая функция очищает состояние (если пользователь переключился с другой кнопки)
 # и выдаёт сообщение о том, что функция в разработке.
 
-#@dp.message(F.text == "💬 Поговорить")
-#async def placeholder_talk(message: types.Message):
-#    """Заглушка для кнопки 'Поговорить'."""
-#    await message.answer("🛠 Функция «Поговорить» будет добавлена в ближайшее время.", reply_markup=main_menu_kb)
-
 @dp.message(F.text == "🌱 Заземлиться")
 async def placeholder_grounding(message: types.Message, state: FSMContext): # <-- добавили state
     await state.clear()
@@ -128,7 +123,8 @@ register_dialog_handlers(dp)
 # -------------------------------------------------------------------
 async def main():
     """Точка входа: запуск поллинга (бот опрашивает Telegram на наличие новых сообщений)."""
-    print("Бот запущен. Все кнопки — заглушки.")
+    print("Бот запущен. Кнопка Поговорить - работает. Остальные кнопки — заглушки.")
+    print("Создана база данных, бот помнит диалог последнии 10 сообщений юзера")
     await dp.start_polling(bot)   # запускаем бесконечный цикл приёма сообщений
 
 if __name__ == "__main__":

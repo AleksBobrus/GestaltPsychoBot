@@ -1,45 +1,25 @@
 # handlers/dialog_handlers.py
 # Этот файл содержит все обработчики для кнопки "💬 Поговорить".
 # Здесь реализован режим диалога с использованием DeepSeek API,
-# с сохранением истории сообщений (в оперативной памяти) для контекста.
+# с сохранением истории в SQLite
 
 # -------------------------------------------------------------------
 # ИМПОРТЫ
 # -------------------------------------------------------------------
+import asyncio  # <-- Добавляет задержку индикатора печати
 from aiogram import types, F                     # типы Telegram и фильтры
 from aiogram.fsm.context import FSMContext       # контекст машины состояний
 from aiogram.fsm.state import State, StatesGroup # для определения состояний
 from aiogram.types import ReplyKeyboardRemove    # для принудительного удаления клавиатуры
 from keyboards import dialog_kb, main_menu_kb    # наши клавиатуры (импорт из keyboards.py)
 from ai_client import get_ai_response            # функция вызова DeepSeek API
+from database import init_db, save_message, get_recent_history, clear_user_history  # <-- добавил базу данных
 
 # -------------------------------------------------------------------
-# ХРАНИЛИЩЕ ИСТОРИИ СООБЩЕНИЙ (в оперативной памяти)
+# ХРАНИЛИЩЕ ИСТОРИИ СООБЩЕНИЙ (в базе данных SQLite)
 # -------------------------------------------------------------------
-# Структура: { user_id: [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}, ...] }
-# При перезапуске бота история теряется – для продакшена нужно сохранять в БД.
-user_histories = {}
-
-def get_user_history(user_id: int) -> list:
-    """
-    Возвращает список истории сообщений для пользователя.
-    Если пользователя ещё нет в словаре, создаётся пустой список.
-    """
-    if user_id not in user_histories:
-        user_histories[user_id] = []
-    return user_histories[user_id]
-
-def add_to_history(user_id: int, role: str, content: str) -> None:
-    """
-    Добавляет одно сообщение в историю пользователя.
-    Ограничивает длину истории 20 сообщениями (10 пар "user-ассистент"),
-    чтобы не перегружать память и не превышать лимиты контекста DeepSeek.
-    """
-    history = get_user_history(user_id)
-    history.append({"role": role, "content": content})
-    # Оставляем только последние 20 сообщений (10 пар)
-    if len(history) > 20:
-        user_histories[user_id] = history[-20:]
+# Инициализируем БД при первом импорте
+init_db()
 
 # -------------------------------------------------------------------
 # FSM СОСТОЯНИЕ ДЛЯ РЕЖИМА ДИАЛОГА
@@ -50,17 +30,15 @@ class DialogState(StatesGroup):
     Когда бот находится в этом состоянии, все текстовые сообщения (кроме команды выхода)
     направляются в обработчик process_dialog.
     """
-    waiting_for_message = State()
+    waiting_for_message = State()   # бот ожидает сообщение от пользователя
 
 # -------------------------------------------------------------------
 # ОБРАБОТЧИК ВХОДА В РЕЖИМ ДИАЛОГА (кнопка "Поговорить")
 # -------------------------------------------------------------------
 async def start_talk(message: types.Message, state: FSMContext):
     """
-    Вызывается, когда пользователь нажимает кнопку "💬 Поговорить".
-    - Устанавливает состояние DialogState.waiting_for_message.
-    - Отправляет сообщение с инструкцией.
-    - Показывает клавиатуру dialog_kb (только кнопка "❌ Завершить диалог").
+    Обработчик нажатия кнопки "💬 Поговорить".
+    Устанавливает состояние ожидания сообщения и показывает клавиатуру с кнопкой "Завершить диалог".
     """
     await state.set_state(DialogState.waiting_for_message)
     await message.answer(
@@ -74,56 +52,59 @@ async def start_talk(message: types.Message, state: FSMContext):
 # -------------------------------------------------------------------
 async def exit_dialog(message: types.Message, state: FSMContext):
     """
-    Вызывается, когда пользователь нажимает "❌ Завершить диалог"
-    и бот находится в состоянии DialogState.waiting_for_message.
-    - Очищает состояние (выход из диалога).
-    - Удаляет историю сообщений пользователя (освобождаем память).
-    - Убирает клавиатуру диалога и показывает главное меню.
+    Обработчик нажатия кнопки "❌ Завершить диалог".
+    Сбрасывает состояние FSM, удаляет клавиатуру диалога и возвращает главное меню.
+    По желанию можно очистить историю диалога пользователя, вызвав clear_user_history.
     """
     user_id = message.from_user.id
-    # Очищаем историю для этого пользователя, чтобы следующий диалог начинался с нуля
-    if user_id in user_histories:
-        del user_histories[user_id]
+    # Раскомментируйте следующую строку, если хотите удалять историю при выходе
+    # clear_user_history(user_id)
 
     # Сбрасываем состояние FSM
     await state.clear()
 
     # Telegram может не сразу обновить клавиатуру, поэтому сначала отправляем сообщение
-    # с ReplyKeyboardRemove (удаляет текущую клавиатуру), затем отдельным сообщением
-    # показываем главное меню.
-    await message.answer("Диалог завершён.", reply_markup=ReplyKeyboardRemove())
-    await message.answer("Главное меню:", reply_markup=main_menu_kb)
+    # с ReplyKeyboardRemove (удаляет текущую клавиатуру),
+    # Сначала убираем клавиатуру диалога
+    # await message.answer("Диалог завершён.", reply_markup=ReplyKeyboardRemove())
+
+    # затем отдельным сообщением показываем главное меню.
+    await message.answer("Диалог завершён.", reply_markup=main_menu_kb)
 
 # -------------------------------------------------------------------
 # ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ В РЕЖИМЕ ДИАЛОГА (с DeepSeek)
 # -------------------------------------------------------------------
 async def process_dialog(message: types.Message, state: FSMContext):
     """
-    Вызывается на любое текстовое сообщение (кроме кнопки выхода),
-    когда бот находится в состоянии DialogState.waiting_for_message.
+    Основной обработчик текстовых сообщений в режиме диалога.
     Шаги:
-    1. Получаем ID пользователя и текст.
-    2. Сохраняем сообщение пользователя в историю.
-    3. Извлекаем последние 10 сообщений (контекст).
-    4. Вызываем DeepSeek API через ai_client.get_ai_response().
-    5. Сохраняем ответ бота в историю.
-    6. Отправляем ответ пользователю с той же клавиатурой dialog_kb.
+    1. Сохранить сообщение пользователя в БД.
+    2. Загрузить последние 10 сообщений из БД для контекста.
+    3. Вызвать DeepSeek API с этим контекстом.
+    4. Сохранить ответ бота в БД.
+    5. Отправить ответ пользователю с той же клавиатурой.
     """
     user_id = message.from_user.id
     user_text = message.text
 
     # 1. Сохраняем сообщение пользователя в историю
-    add_to_history(user_id, "user", user_text)
+    save_message(user_id, "user", user_text)
 
-    # 2. Берём последние 10 сообщений для контекста
-    #    (это и user, и assistant, исключая системный промпт)
-    history = get_user_history(user_id)[-10:]
+    # Показываем индикатор "печатает"
+    # Отправляем индикатор "печатает" (явно через bot)
+
+    await message.bot.send_chat_action(chat_id=user_id, action="typing")
+    await asyncio.sleep(1.0)  # небольшая пауза для отображения
+
+
+    # 2. Получаем последние 10 сообщений для контекста
+    history = get_recent_history(user_id, limit=10)
 
     # 3. Получаем ответ от DeepSeek
     reply = await get_ai_response(history)
 
     # 4. Сохраняем ответ бота в историю
-    add_to_history(user_id, "assistant", reply)
+    save_message(user_id, "assistant", reply)
 
     # 5. Отправляем ответ, показывая ту же клавиатуру (чтобы можно было выйти)
     await message.answer(reply, reply_markup=dialog_kb)
@@ -133,14 +114,12 @@ async def process_dialog(message: types.Message, state: FSMContext):
 # -------------------------------------------------------------------
 def register_dialog_handlers(dp):
     """
-    Регистрирует все хендлеры, определённые в этом файле, в диспетчере dp.
+    Регистрирует все обработчики диалога в диспетчере dp.
     Вызывается из bot.py после создания диспетчера.
     """
     # Регистрация входа в диалог (кнопка "Поговорить")
     dp.message.register(start_talk, F.text == "💬 Поговорить")
-
     # Регистрация выхода из диалога (кнопка "Завершить диалог") – только в состоянии диалога
     dp.message.register(exit_dialog, DialogState.waiting_for_message, F.text == "❌ Завершить диалог")
-
     # Регистрация обработчика текстовых сообщений в диалоге
     dp.message.register(process_dialog, DialogState.waiting_for_message, F.text)
