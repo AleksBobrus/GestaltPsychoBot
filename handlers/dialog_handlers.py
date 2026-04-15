@@ -19,6 +19,7 @@ from database import (
     init_db, save_message, get_recent_history,
     can_send_message, increment_message_count, get_message_count_today
 )   # <-- добавил базу данных
+from crisis_detector import detect_crisis, get_crisis_response  # детектор кризисов
 
 # -------------------------------------------------------------------
 # ХРАНИЛИЩЕ ИСТОРИИ СООБЩЕНИЙ (в базе данных SQLite)
@@ -116,22 +117,36 @@ async def process_dialog(message: types.Message, state: FSMContext):
         )
         return
 
-    # ---------- ШАГ 2: СОХРАНЕНИЕ СООБЩЕНИЯ ПОЛЬЗОВАТЕЛЯ ----------
+    # ---------- ШАГ 2: ДЕТЕКЦИЯ КРИЗИСА ----------
+    is_crisis, matched_phrase = detect_crisis(user_text)
+    if is_crisis:
+        print(f"⚠️ [CRISIS] Обнаружена кризисная фраза: '{matched_phrase}'")
+        await message.answer(
+            get_crisis_response(),
+            parse_mode="Markdown",
+            reply_markup=dialog_kb
+        )
+        # Сохраняем сообщение пользователя для статистики (но не отправляем в AI)
+        save_message(user_id, "user", user_text)
+        save_message(user_id, "system", "[CRISIS DETECTED]")
+        return
+
+    # ---------- ШАГ 3: СОХРАНЕНИЕ СООБЩЕНИЯ ПОЛЬЗОВАТЕЛЯ ----------
     save_message(user_id, "user", user_text)
 
-    # ---------- ШАГ 3: УВЕЛИЧЕНИЕ СЧЁТЧИКА СООБЩЕНИЙ ----------
+    # ---------- ШАГ 4: УВЕЛИЧЕНИЕ СЧЁТЧИКА СООБЩЕНИЙ ----------
     new_count = increment_message_count(user_id)
     print(f"[INFO] Сообщение {new_count}/20 получено")
 
-    # ---------- ШАГ 4: ИНДИКАТОР "ПЕЧАТАЕТ" ----------
+    # ---------- ШАГ 5: ИНДИКАТОР "ПЕЧАТАЕТ" ----------
     await message.bot.send_chat_action(chat_id=user_id, action="typing")
     # Небольшая пауза, чтобы индикатор успел отобразиться
     await asyncio.sleep(0.5)
 
-    # ---------- ШАГ 5: ПОЛУЧЕНИЕ КОНТЕКСТА (последние 10 сообщений) ----------
+    # ---------- ШАГ 6: ПОЛУЧЕНИЕ КОНТЕКСТА (последние 10 сообщений) ----------
     history = get_recent_history(user_id, limit=10)
 
-    # ---------- ШАГ 6: ВЫЗОВ DEEPSEEK API ----------
+    # ---------- ШАГ 7: ВЫЗОВ DEEPSEEK API ----------
     try:
         reply = get_ai_response(history)
     except Exception as e:
@@ -142,10 +157,10 @@ async def process_dialog(message: types.Message, state: FSMContext):
         )
         return
 
-    # ---------- ШАГ 7: СОХРАНЕНИЕ ОТВЕТА БОТА ----------
+    # ---------- ШАГ 8: СОХРАНЕНИЕ ОТВЕТА БОТА ----------
     save_message(user_id, "assistant", reply)
 
-    # ---------- ШАГ 8: ОТПРАВКА ОТВЕТА ПОЛЬЗОВАТЕЛЮ ----------
+    # ---------- ШАГ 9: ОТПРАВКА ОТВЕТА ПОЛЬЗОВАТЕЛЮ ----------
     # Отправляем ответ, оставляя ту же клавиатуру (чтобы можно было выйти)
     try:
         await message.answer(reply, parse_mode="Markdown", reply_markup=dialog_kb)
