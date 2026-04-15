@@ -20,7 +20,7 @@ SYSTEM_PROMPT = """
 - Если пользователь говорит о суициде или кризисе, мягко предложи обратиться к специалисту (телефон доверия 8-800-2000-122).
 """
 
-async def get_ai_response(messages_history: list) -> str:
+def get_ai_response(messages_history: list) -> str:
     """
     Отправляет историю сообщений в DeepSeek и возвращает ответ.
     messages_history – список словарей [{"role": "user", "content": "..."}, ...]
@@ -35,5 +35,5 @@ async def get_ai_response(messages_history: list) -> str:
         )
         return response.choices[0].message.content
     except Exception as e:
-        print(f"Ошибка DeepSeek API: {e}")
-        return "Извините, сейчас я не могу ответить. Попробуйте позже."
+        print(f"❌ Ошибка DeepSeek API: {e}")
+        return "😔 Извините, сейчас я не могу ответить. Попробуйте позже или обратитесь в поддержку."

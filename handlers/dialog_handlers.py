@@ -97,11 +97,21 @@ async def process_dialog(message: types.Message, state: FSMContext):
 
     # ---------- ШАГ 1: ПРОВЕРКА ЛИМИТА (20 сообщений в день) ----------
     if not can_send_message(user_id, limit=20):
+        from datetime import datetime, timedelta
         today_count = get_message_count_today(user_id)
+
+        # Вычисляем время до полуночи (сброса лимита)
+        now = datetime.now()
+        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        time_until_reset = tomorrow - now
+        hours, remainder = divmod(int(time_until_reset.total_seconds()), 3600)
+        minutes, _ = divmod(remainder, 60)
+
         await message.answer(
             f"⚠️ Вы исчерпали лимит бесплатных сообщений на сегодня.\n"
-            f"Вы отправили {today_count} из 20.\n"
-            f"Пожалуйста, вернитесь завтра!",
+            f"Отправлено: {today_count} из 20\n\n"
+            f"⏰ До сброса лимита: {hours} ч {minutes} мин\n"
+            f"Возвращайтесь завтра!",
             reply_markup=dialog_kb
         )
         return
@@ -111,26 +121,38 @@ async def process_dialog(message: types.Message, state: FSMContext):
 
     # ---------- ШАГ 3: УВЕЛИЧЕНИЕ СЧЁТЧИКА СООБЩЕНИЙ ----------
     new_count = increment_message_count(user_id)
-    # Отладочный вывод в консоль (можно убрать)
-    print(f"[DEBUG] Пользователь {user_id} отправил {new_count}/20 сообщений сегодня")
+    print(f"[INFO] Сообщение {new_count}/20 получено")
 
     # ---------- ШАГ 4: ИНДИКАТОР "ПЕЧАТАЕТ" ----------
     await message.bot.send_chat_action(chat_id=user_id, action="typing")
     # Небольшая пауза, чтобы индикатор успел отобразиться
-    await asyncio.sleep(1.0)
+    await asyncio.sleep(0.5)
 
     # ---------- ШАГ 5: ПОЛУЧЕНИЕ КОНТЕКСТА (последние 10 сообщений) ----------
     history = get_recent_history(user_id, limit=10)
 
     # ---------- ШАГ 6: ВЫЗОВ DEEPSEEK API ----------
-    reply = await get_ai_response(history)
+    try:
+        reply = get_ai_response(history)
+    except Exception as e:
+        print(f"❌ Критическая ошибка при вызове AI: {e}")
+        await message.answer(
+            "😔 Произошла ошибка при обращении к ИИ. Пожалуйста, попробуйте позже.",
+            reply_markup=dialog_kb
+        )
+        return
 
     # ---------- ШАГ 7: СОХРАНЕНИЕ ОТВЕТА БОТА ----------
     save_message(user_id, "assistant", reply)
 
     # ---------- ШАГ 8: ОТПРАВКА ОТВЕТА ПОЛЬЗОВАТЕЛЮ ----------
     # Отправляем ответ, оставляя ту же клавиатуру (чтобы можно было выйти)
-    await message.answer(reply, parse_mode="Markdown", reply_markup=dialog_kb)
+    try:
+        await message.answer(reply, parse_mode="Markdown", reply_markup=dialog_kb)
+    except Exception as e:
+        # Если Markdown не распарсился, отправляем без форматирования
+        print(f"⚠️ Ошибка парсинга Markdown: {e}")
+        await message.answer(reply, reply_markup=dialog_kb)
 
 # -------------------------------------------------------------------
 # РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ В ДИСПЕТЧЕРЕ
