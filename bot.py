@@ -40,8 +40,6 @@ from keyboards import main_menu_kb
 
 # Импортируем регистратор из модуля диалога (чтобы подключить обработчики "Поговорить")
 from handlers.dialog_handlers import register_dialog_handlers
-# Импортируем регистратор из модуля личный кабинет (чтобы подключить обработчики "Личный кабинет")
-from handlers.profile_handlers import register_profile_handlers
 
 
 # -------------------------------------------------------------------
@@ -91,11 +89,11 @@ async def placeholder_test(message: types.Message, state: FSMContext):  # <-- д
     """Заглушка для кнопки 'Пройти тест'."""
     await message.answer("🛠 Тест Бека будет доступен в следующей версии.", reply_markup=main_menu_kb)
 
-#@dp.message(F.text == "👤 Личный кабинет")
-#async def placeholder_profile(message: types.Message, state: FSMContext):    # <-- добавили state
-#    await state.clear()
-#    """Заглушка для кнопки 'Личный кабинет'."""
-#    await message.answer("🛠 Личный кабинет в разработке.", reply_markup=main_menu_kb)
+@dp.message(F.text == "👤 Личный кабинет")
+async def placeholder_profile(message: types.Message, state: FSMContext):
+    await state.clear()
+    """Заглушка для кнопки 'Личный кабинет'."""
+    await message.answer("🛠 Личный кабинет в разработке.", reply_markup=main_menu_kb)
 
 @dp.message(F.text == "ℹ️ О боте")
 async def about_bot(message: types.Message, state: FSMContext): # <-- добавили state
@@ -119,8 +117,6 @@ async def about_bot(message: types.Message, state: FSMContext): # <-- добав
 # Регистрируем все хендлеры, определённые в файле handlers/dialog_handlers.py
 # (кнопка "Поговорить", режим диалога, кнопка выхода и временная заглушка).
 register_dialog_handlers(dp)
-# Личный кабинет
-register_profile_handlers(dp)
 
 # -------------------------------------------------------------------
 # ЗАПУСК БОТА
@@ -128,10 +124,10 @@ register_profile_handlers(dp)
 async def main():
     """Точка входа: запуск поллинга (бот опрашивает Telegram на наличие новых сообщений)."""
     print("✅ Бот запущен.")
-    print("💬 Кнопка «Поговорить» – работает с DeepSeek, историей в SQLite, индикатором набора.")
-    print("👤 Кнопка «Личный кабинет» – активен (статистика и история тестов Бека).")
+    print("💬 Кнопка «Поговорить» – работает с DeepSeek, лимит 20 сообщений/день.")
     print("🌱 Кнопка «Заземлиться» – заглушка.")
     print("📋 Кнопка «Пройти тест» – заглушка.")
+    print("👤 Кнопка «Личный кабинет» – заглушка.")
     print("ℹ️ Кнопка «О боте» – информация.")
     await dp.start_polling(bot)   # запускаем бесконечный цикл приёма сообщений
 

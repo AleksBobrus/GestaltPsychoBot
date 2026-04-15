@@ -113,42 +113,7 @@ def save_bdi_result(user_id: int, score: int, interpretation: str) -> None:
     conn.commit()
     conn.close()
 
-def get_user_bdi_results(user_id: int, limit: int = 10) -> List[Dict]:
-    """Возвращает последние `limit` результатов теста для пользователя."""
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("""
-        SELECT date, score, interpretation FROM bdi_results
-        WHERE user_id = ?
-        ORDER BY date DESC LIMIT ?
-    """, (user_id, limit))
-    rows = c.fetchall()
-    conn.close()
-    results = []
-    for row in rows:
-        results.append({
-            "date": row[0],
-            "score": row[1],
-            "interpretation": row[2]
-        })
-    return results
 
-def get_bdi_statistics(user_id: int) -> Dict:
-    """Возвращает статистику по тестам пользователя (количество, средний балл, мин, макс, последний)."""
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*), AVG(score), MAX(score), MIN(score) FROM bdi_results WHERE user_id = ?", (user_id,))
-    count, avg, max_score, min_score = c.fetchone()
-    c.execute("SELECT score FROM bdi_results WHERE user_id = ? ORDER BY date DESC LIMIT 1", (user_id,))
-    last = c.fetchone()
-    conn.close()
-    return {
-        "count": count or 0,
-        "avg": round(avg, 1) if avg else 0,
-        "max": max_score or 0,
-        "min": min_score or 0,
-        "last": last[0] if last else None
-    }
 
 
 # -------------------------------------------------------------------

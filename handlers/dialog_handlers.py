@@ -17,7 +17,7 @@ from keyboards import dialog_kb, main_menu_kb    # наши клавиатуры
 from ai_client import get_ai_response            # функция вызова DeepSeek API
 from database import (
     init_db, save_message, get_recent_history,
-    can_send_message, increment_message_count
+    can_send_message, increment_message_count, get_message_count_today
 )   # <-- добавил базу данных
 
 # -------------------------------------------------------------------
@@ -97,14 +97,11 @@ async def process_dialog(message: types.Message, state: FSMContext):
 
     # ---------- ШАГ 1: ПРОВЕРКА ЛИМИТА (20 сообщений в день) ----------
     if not can_send_message(user_id, limit=20):
-        # Подсчитываем, сколько осталось до конца дня (необязательно)
-        from database import get_message_count_today
         today_count = get_message_count_today(user_id)
-        remaining = 20 - today_count
         await message.answer(
             f"⚠️ Вы исчерпали лимит бесплатных сообщений на сегодня.\n"
             f"Вы отправили {today_count} из 20.\n"
-            f"Пожалуйста, вернитесь завтра. В ближайшее время появится подписка для снятия лимита.",
+            f"Пожалуйста, вернитесь завтра!",
             reply_markup=dialog_kb
         )
         return
@@ -133,7 +130,7 @@ async def process_dialog(message: types.Message, state: FSMContext):
 
     # ---------- ШАГ 8: ОТПРАВКА ОТВЕТА ПОЛЬЗОВАТЕЛЮ ----------
     # Отправляем ответ, оставляя ту же клавиатуру (чтобы можно было выйти)
-    await message.answer(reply, reply_markup=dialog_kb)
+    await message.answer(reply, parse_mode="Markdown", reply_markup=dialog_kb)
 
 # -------------------------------------------------------------------
 # РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ В ДИСПЕТЧЕРЕ
