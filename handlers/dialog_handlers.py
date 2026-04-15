@@ -17,9 +17,11 @@ from keyboards import dialog_kb, main_menu_kb    # наши клавиатуры
 from ai_client import get_ai_response            # функция вызова DeepSeek API
 from database import (
     init_db, save_message, get_recent_history,
-    can_send_message, increment_message_count, get_message_count_today
+    can_send_message, increment_message_count, get_message_count_today,
+    count_user_messages, get_messages_for_summary, save_summary, get_all_summaries
 )   # <-- добавил базу данных
 from crisis_detector import detect_crisis, get_crisis_response  # детектор кризисов
+from ai_client import get_ai_response, create_summary  # AI функции
 
 # -------------------------------------------------------------------
 # ХРАНИЛИЩЕ ИСТОРИИ СООБЩЕНИЙ (в базе данных SQLite)
@@ -139,13 +141,40 @@ async def process_dialog(message: types.Message, state: FSMContext):
     new_count = increment_message_count(user_id)
     print(f"[INFO] Сообщение {new_count}/20 получено")
 
+    # ---------- ШАГ 4.5: ТРИГГЕР СУММАРИЗАЦИИ (каждые 30 сообщений) ----------
+    total_user_messages = count_user_messages(user_id)
+    if total_user_messages > 0 and total_user_messages % 30 == 0:
+        print(f"[INFO] Создание суммаризации для пользователя {user_id} ({total_user_messages} сообщений)")
+        messages_to_summarize, start_id, end_id = get_messages_for_summary(user_id, limit=30)
+        if messages_to_summarize:
+            summary_text = create_summary(messages_to_summarize)
+            save_summary(user_id, start_id, end_id, summary_text)
+            print(f"[INFO] Суммаризация сохранена: {summary_text[:100]}...")
+
     # ---------- ШАГ 5: ИНДИКАТОР "ПЕЧАТАЕТ" ----------
     await message.bot.send_chat_action(chat_id=user_id, action="typing")
     # Небольшая пауза, чтобы индикатор успел отобразиться
     await asyncio.sleep(0.5)
 
-    # ---------- ШАГ 6: ПОЛУЧЕНИЕ КОНТЕКСТА (последние 20 сообщений) ----------
-    history = get_recent_history(user_id, limit=20)
+    # ---------- ШАГ 6: ПОЛУЧЕНИЕ КОНТЕКСТА (суммаризации + последние 20 сообщений) ----------
+    # Загружаем все суммаризации (выжимки прошлых диалогов)
+    summaries = get_all_summaries(user_id)
+
+    # Загружаем последние 20 сообщений
+    recent_messages = get_recent_history(user_id, limit=20)
+
+    # Формируем полный контекст: суммаризации как system-сообщения + последние сообщения
+    history = []
+    if summaries:
+        # Добавляем суммаризации как контекст от системы
+        combined_summary = "\n\n---\n\n".join(summaries)
+        history.append({
+            "role": "system",
+            "content": f"Контекст предыдущих диалогов:\n{combined_summary}"
+        })
+
+    # Добавляем последние сообщения
+    history.extend(recent_messages)
 
     # ---------- ШАГ 7: ВЫЗОВ DEEPSEEK API ----------
     try:

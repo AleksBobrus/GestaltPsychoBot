@@ -4,7 +4,7 @@
 
 import sqlite3
 from datetime import datetime, date
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 
 # Имя файла базы данных (создаётся в папке проекта)
 DB_NAME = "dialog_history.db"
@@ -54,6 +54,21 @@ def init_db() -> None:
             reset_date TEXT        -- дата в формате ГГГГ-ММ-ДД
         )
     """)
+
+    # -------------------------------------------------------------------
+    # ТАБЛИЦА СУММАРИЗАЦИЙ ДИАЛОГОВ
+    # -------------------------------------------------------------------
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS summaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            start_message_id INTEGER,   -- ID первого сообщения в диапазоне
+            end_message_id INTEGER,     -- ID последнего сообщения в диапазоне
+            summary_text TEXT,          -- Краткая выжимка диалога
+            created_at TIMESTAMP
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_summaries_user_id ON summaries(user_id)")
 
     conn.commit()
     conn.close()
@@ -171,3 +186,74 @@ def can_send_message(user_id: int, limit: int = 20) -> bool:
     """
     count = get_message_count_today(user_id)
     return count < limit
+
+
+# -------------------------------------------------------------------
+# ФУНКЦИИ ДЛЯ СУММАРИЗАЦИИ ДИАЛОГОВ
+# -------------------------------------------------------------------
+def save_summary(user_id: int, start_msg_id: int, end_msg_id: int, summary_text: str) -> None:
+    """Сохраняет суммаризацию диалога в БД."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO summaries (user_id, start_message_id, end_message_id, summary_text, created_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, (user_id, start_msg_id, end_msg_id, summary_text, datetime.now()))
+    conn.commit()
+    conn.close()
+    print(f"[INFO] Создана суммаризация для сообщений {start_msg_id}-{end_msg_id}")
+
+
+def get_all_summaries(user_id: int) -> List[str]:
+    """Возвращает все суммаризации пользователя в хронологическом порядке."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT summary_text FROM summaries
+        WHERE user_id = ?
+        ORDER BY created_at ASC
+    """, (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [row[0] for row in rows]
+
+
+def get_messages_for_summary(user_id: int, limit: int = 30) -> Tuple[List[Dict], int, int]:
+    """
+    Возвращает последние N сообщений для создания суммаризации.
+    Возвращает: (messages, start_id, end_id)
+    """
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, role, content FROM chat_history
+        WHERE user_id = ?
+        ORDER BY timestamp DESC LIMIT ?
+    """, (user_id, limit))
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        return [], 0, 0
+
+    # Разворачиваем (были в обратном порядке)
+    rows = list(reversed(rows))
+
+    messages = [{"role": row[1], "content": row[2]} for row in rows]
+    start_id = rows[0][0]
+    end_id = rows[-1][0]
+
+    return messages, start_id, end_id
+
+
+def count_user_messages(user_id: int) -> int:
+    """Возвращает общее количество сообщений пользователя в истории."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT COUNT(*) FROM chat_history
+        WHERE user_id = ? AND role = 'user'
+    """, (user_id,))
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
