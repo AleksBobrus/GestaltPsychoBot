@@ -1,18 +1,27 @@
 # ai_client.py
-# Асинхронный клиент для DeepSeek API с улучшенной обработкой ошибок.
+# Асинхронный клиент для взаимодействия с DeepSeek API.
+# Использует библиотеку openai с AsyncOpenAI для неблокирующих запросов.
 
 import os
+import logging
 from openai import AsyncOpenAI, APIError, APIConnectionError, RateLimitError, AuthenticationError
 from dotenv import load_dotenv
 
+# Загружаем переменные окружения из файла .env
 load_dotenv()
+
+# Получаем API-ключ DeepSeek из переменных окружения
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 if not DEEPSEEK_API_KEY:
-    raise ValueError("DEEPSEEK_API_KEY не найден в .env")
+    raise ValueError("❌ DEEPSEEK_API_KEY не найден в .env файле!")
 
-# Асинхронный клиент
+# Создаём асинхронного клиента OpenAI, указывая базовый URL DeepSeek
 client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
 
+# Настройка логгера для этого модуля
+logger = logging.getLogger(__name__)
+
+# Системный промпт – определяет роль и правила поведения ИИ-психолога
 SYSTEM_PROMPT = """
 Ты – психологический помощник в стиле гештальт-терапии и КПТ.
 Правила:
@@ -23,44 +32,75 @@ SYSTEM_PROMPT = """
 """
 
 
+# -------------------------------------------------------------------
+# ОСНОВНАЯ ФУНКЦИЯ ПОЛУЧЕНИЯ ОТВЕТА ОТ ИИ (БЕЗ СТРИМИНГА)
+# -------------------------------------------------------------------
 async def get_ai_response(messages_history: list) -> str:
     """
-    Отправляет историю диалога в DeepSeek и возвращает ответ ассистента.
-    В случае ошибок API возвращает понятное сообщение для пользователя.
+    Отправляет историю диалога в DeepSeek и возвращает полный ответ ассистента.
+
+    Аргументы:
+        messages_history: список сообщений формата [{"role": "user/assistant", "content": "..."}]
+
+    Возвращает:
+        str: ответ нейросети или сообщение об ошибке.
     """
+    # Добавляем системный промпт в начало истории
     full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages_history
 
     try:
+        logger.info("Отправка запроса в DeepSeek API (без стрима)...")
         response = await client.chat.completions.create(
             model="deepseek-chat",
             messages=full_messages,
-            temperature=0.7,
-            max_tokens=1000
+            temperature=0.7,   # уровень креативности (0 – точно, 1 – творчески)
+            max_tokens=1000    # максимальная длина ответа
         )
-        return response.choices[0].message.content
+        # Извлекаем текст ответа
+        reply = response.choices[0].message.content
+        logger.info(f"Получен ответ от DeepSeek (длина: {len(reply)} символов).")
+        return reply
 
     except AuthenticationError:
-        # Неверный API-ключ – критично, логируем, но пользователю не раскрываем детали
-        print("❌ Критическая ошибка: неверный DEEPSEEK_API_KEY")
+        # Неверный API-ключ – критическая ошибка, логируем, но пользователю не раскрываем
+        logger.critical("Неверный DEEPSEEK_API_KEY!")
         return "⚠️ Ошибка конфигурации сервера. Пожалуйста, сообщите администратору."
 
     except RateLimitError:
+        # Превышен лимит запросов к API
+        logger.warning("Превышен лимит запросов к DeepSeek API.")
         return "⚠️ Слишком много запросов. Пожалуйста, подождите немного и попробуйте снова."
 
     except APIConnectionError:
+        # Проблемы с сетью или недоступность сервера
+        logger.error("Не удалось подключиться к DeepSeek API.")
         return "⚠️ Проблемы с подключением к серверу ИИ. Проверьте интернет или повторите позже."
 
     except APIError as e:
-        # Любая другая ошибка API (например, 500)
-        print(f"❌ API Error: {e}")
+        # Любая другая ошибка API (например, 500 Internal Server Error)
+        logger.error(f"Ошибка DeepSeek API: {e}")
         return "⚠️ Ошибка на стороне сервера ИИ. Попробуйте позже."
 
+    except Exception as e:
+        # Непредвиденная ошибка (логируем с traceback)
+        logger.exception("Неожиданная ошибка при вызове DeepSeek API")
+        return "😔 Произошла внутренняя ошибка. Мы уже работаем над её исправлением."
 
+
+# -------------------------------------------------------------------
+# ФУНКЦИЯ СОЗДАНИЯ СУММАРИЗАЦИИ ДИАЛОГА
+# -------------------------------------------------------------------
 async def create_summary(messages: list) -> str:
     """
-    Создаёт краткую суммаризацию диалога через DeepSeek API.
-    messages – список словарей [{"role": "user", "content": "..."}, ...]
+    Создаёт краткую выжимку (суммаризацию) диалога для сохранения контекста.
+
+    Аргументы:
+        messages: список сообщений формата [{"role": "user/assistant", "content": "..."}]
+
+    Возвращает:
+        str: текст суммаризации или сообщение об ошибке.
     """
+    # Специальный промпт для суммаризации
     summary_prompt = """Ты — психологический помощник. Перед тобой диалог с пользователем.
 Создай КРАТКУЮ выжимку этого диалога (3-5 предложений):
 - Основные проблемы и переживания пользователя
@@ -72,23 +112,25 @@ async def create_summary(messages: list) -> str:
 Будь лаконичен, но сохрани суть."""
 
     try:
+        # Преобразуем историю в текстовый формат для удобства
         conversation_text = "\n".join([
             f"{msg['role'].upper()}: {msg['content']}" for msg in messages
         ])
 
+        logger.info("Создание суммаризации через DeepSeek...")
         response = await client.chat.completions.create(
             model="deepseek-chat",
             messages=[
                 {"role": "system", "content": summary_prompt},
                 {"role": "user", "content": f"Диалог для суммаризации:\n\n{conversation_text}"}
             ],
-            temperature=0.3,
-            max_tokens=300
+            temperature=0.3,   # низкая температура для стабильности
+            max_tokens=300     # короткая выжимка
         )
-        return response.choices[0].message.content
+        summary = response.choices[0].message.content
+        logger.info(f"Суммаризация создана (длина: {len(summary)} символов).")
+        return summary
 
     except Exception as e:
-        # Для суммаризации менее критично, оставляем общий обработчик,
-        # но логируем ошибку.
-        print(f"❌ Ошибка создания суммаризации: {e}")
+        logger.error(f"Ошибка при создании суммаризации: {e}")
         return "[Ошибка создания суммаризации]"

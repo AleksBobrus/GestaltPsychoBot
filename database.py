@@ -169,6 +169,56 @@ async def can_send_message(user_id: int, limit: int = 20) -> bool:
 
 
 # -------------------------------------------------------------------
+# НОВАЯ АТОМАРНАЯ ФУНКЦИЯ ДЛЯ ПРОВЕРКИ И ИНКРЕМЕНТА ЛИМИТА
+# -------------------------------------------------------------------
+async def try_increment_and_check_limit(user_id: int, limit: int = 20) -> Tuple[bool, int]:
+    """
+    Атомарно проверяет, не превышен ли лимит, и увеличивает счётчик.
+    Возвращает:
+        (True, new_count) – если сообщение разрешено,
+        (False, current_count) – если лимит уже исчерпан.
+
+    Использует транзакцию BEGIN IMMEDIATE для предотвращения гонок.
+    """
+    today_str = date.today().isoformat()
+    async with aiosqlite.connect(DB_NAME) as conn:
+        # BEGIN IMMEDIATE блокирует запись для других соединений до COMMIT
+        await conn.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = await conn.execute(
+                "SELECT daily_count, reset_date FROM message_limits WHERE user_id = ?",
+                (user_id,)
+            )
+            row = await cursor.fetchone()
+
+            if row:
+                count, reset_date = row
+                if reset_date == today_str:
+                    if count >= limit:
+                        await conn.commit()
+                        return False, count
+                    new_count = count + 1
+                else:
+                    new_count = 1
+                await conn.execute(
+                    "UPDATE message_limits SET daily_count = ?, reset_date = ? WHERE user_id = ?",
+                    (new_count, today_str, user_id)
+                )
+            else:
+                new_count = 1
+                await conn.execute(
+                    "INSERT INTO message_limits (user_id, daily_count, reset_date) VALUES (?, ?, ?)",
+                    (user_id, new_count, today_str)
+                )
+
+            await conn.commit()
+            return True, new_count
+        except Exception:
+            await conn.rollback()
+            raise
+
+
+# -------------------------------------------------------------------
 # СУММАРИЗАЦИЯ
 # -------------------------------------------------------------------
 async def save_summary(user_id: int, start_msg_id: int, end_msg_id: int, summary_text: str) -> None:
@@ -209,7 +259,7 @@ async def get_messages_for_summary(user_id: int, limit: int = 30) -> Tuple[List[
     if not rows:
         return [], 0, 0
 
-    rows = list(reversed(rows))  # от старых к новым
+    rows = list(reversed(rows))
     messages = [{"role": row[1], "content": row[2]} for row in rows]
     start_id = rows[0][0]
     end_id = rows[-1][0]
