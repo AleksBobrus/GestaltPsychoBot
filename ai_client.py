@@ -1,7 +1,8 @@
-# ai_client.py – вызов DeepSeek API
+# ai_client.py
+# Асинхронный клиент для DeepSeek API с улучшенной обработкой ошибок.
 
 import os
-from openai import OpenAI
+from openai import AsyncOpenAI, APIError, APIConnectionError, RateLimitError, AuthenticationError
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -9,7 +10,8 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 if not DEEPSEEK_API_KEY:
     raise ValueError("DEEPSEEK_API_KEY не найден в .env")
 
-client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+# Асинхронный клиент
+client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
 
 SYSTEM_PROMPT = """
 Ты – психологический помощник в стиле гештальт-терапии и КПТ.
@@ -20,26 +22,41 @@ SYSTEM_PROMPT = """
 - Если пользователь говорит о суициде или кризисе, мягко предложи обратиться к специалисту (телефон доверия 8-800-2000-122).
 """
 
-def get_ai_response(messages_history: list) -> str:
+
+async def get_ai_response(messages_history: list) -> str:
     """
-    Отправляет историю сообщений в DeepSeek и возвращает ответ.
-    messages_history – список словарей [{"role": "user", "content": "..."}, ...]
+    Отправляет историю диалога в DeepSeek и возвращает ответ ассистента.
+    В случае ошибок API возвращает понятное сообщение для пользователя.
     """
     full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages_history
+
     try:
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model="deepseek-chat",
             messages=full_messages,
             temperature=0.7,
             max_tokens=1000
         )
         return response.choices[0].message.content
-    except Exception as e:
-        print(f"❌ Ошибка DeepSeek API: {e}")
-        return "😔 Извините, сейчас я не могу ответить. Попробуйте позже или обратитесь в поддержку."
+
+    except AuthenticationError:
+        # Неверный API-ключ – критично, логируем, но пользователю не раскрываем детали
+        print("❌ Критическая ошибка: неверный DEEPSEEK_API_KEY")
+        return "⚠️ Ошибка конфигурации сервера. Пожалуйста, сообщите администратору."
+
+    except RateLimitError:
+        return "⚠️ Слишком много запросов. Пожалуйста, подождите немного и попробуйте снова."
+
+    except APIConnectionError:
+        return "⚠️ Проблемы с подключением к серверу ИИ. Проверьте интернет или повторите позже."
+
+    except APIError as e:
+        # Любая другая ошибка API (например, 500)
+        print(f"❌ API Error: {e}")
+        return "⚠️ Ошибка на стороне сервера ИИ. Попробуйте позже."
 
 
-def create_summary(messages: list) -> str:
+async def create_summary(messages: list) -> str:
     """
     Создаёт краткую суммаризацию диалога через DeepSeek API.
     messages – список словарей [{"role": "user", "content": "..."}, ...]
@@ -55,21 +72,23 @@ def create_summary(messages: list) -> str:
 Будь лаконичен, но сохрани суть."""
 
     try:
-        # Формируем сообщения для суммаризации
         conversation_text = "\n".join([
             f"{msg['role'].upper()}: {msg['content']}" for msg in messages
         ])
 
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model="deepseek-chat",
             messages=[
                 {"role": "system", "content": summary_prompt},
                 {"role": "user", "content": f"Диалог для суммаризации:\n\n{conversation_text}"}
             ],
-            temperature=0.3,  # Ниже для более стабильной суммаризации
-            max_tokens=300    # Короткая выжимка
+            temperature=0.3,
+            max_tokens=300
         )
         return response.choices[0].message.content
+
     except Exception as e:
+        # Для суммаризации менее критично, оставляем общий обработчик,
+        # но логируем ошибку.
         print(f"❌ Ошибка создания суммаризации: {e}")
         return "[Ошибка создания суммаризации]"
