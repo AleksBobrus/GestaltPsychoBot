@@ -1,5 +1,6 @@
-# bot.py – основная точка входа бота-психолога
-# Асинхронная версия с логированием, глобальным обработчиком ошибок и инициализацией БД.
+# bot.py
+# Главный файл запуска Telegram-бота «AI-психолог».
+# Добавлен запрос имени пользователя при первом запуске.
 
 import asyncio
 import os
@@ -8,10 +9,12 @@ from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Update
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import ReplyKeyboardRemove
 from keyboards import main_menu_kb
 from handlers.dialog_handlers import register_dialog_handlers
-from database import init_db  # теперь асинхронная
+# from handlers.admin import router as admin_router
+from database import init_db
 
 # -------------------------------------------------------------------
 # НАСТРОЙКА ЛОГИРОВАНИЯ
@@ -42,62 +45,110 @@ dp = Dispatcher()
 # ГЛОБАЛЬНЫЙ ОБРАБОТЧИК ОШИБОК
 # -------------------------------------------------------------------
 @dp.errors()
-async def errors_handler(update: Update, exception: Exception):
-    """Ловит все необработанные исключения, логирует и предотвращает падение бота."""
+async def errors_handler(update: types.Update, exception: Exception):
+    """Ловит все необработанные исключения и логирует их."""
     logger.exception("Критическая ошибка при обработке обновления", exc_info=exception)
-    # При желании можно отправить уведомление администратору
-    return True  # True означает, что ошибка обработана и бот продолжает работу
+    return True
 
 
 # -------------------------------------------------------------------
-# ОБРАБОТЧИКИ КОМАНД
+# FSM ДЛЯ ЗАПРОСА ИМЕНИ
+# -------------------------------------------------------------------
+class NameState(StatesGroup):
+    waiting_for_name = State()
+
+
+# -------------------------------------------------------------------
+# ЕДИНАЯ ФУНКЦИЯ СПРАВКИ
+# -------------------------------------------------------------------
+def get_help_text() -> str:
+    """Возвращает текст с информацией о боте."""
+    return (
+        "🤖 **• AI-психолог •**\n"
+        "Версия: **2.0.0**\n\n"
+        "AI-психолог — это виртуальный помощник для поддержки ментального благополучия. "
+        "Бот использует технологии искусственного интеллекта, чтобы выслушать, "
+        "помочь разобраться в чувствах и предложить полезные техники.\n\n"
+        "✨ **Актуальные возможности:**\n"
+        "• 💬 **Поговорить** — беседа с ИИ-психологом\n"
+        "• 🧠 **Контекст диалога** — запоминание предыдущих бесед\n"
+        "• 🆘 **Кризис-детектор** — распознавание тревожных фраз и предложение помощи\n\n"
+        "🚧 **В планах:**\n"
+        "• 🌱 Техники заземления\n"
+        "• 📋 Тест на уровень депрессии (шкала Бека)\n"
+        "• 👤 Личный кабинет со статистикой\n\n"
+        "⚠️ **Важно:** бот не заменяет профессионального психолога. "
+        "При серьёзных проблемах необходимо обратиться к специалисту."
+    )
+
+
+# -------------------------------------------------------------------
+# ОБРАБОТЧИК КОМАНДЫ /start (ЗАПРОС ИМЕНИ)
 # -------------------------------------------------------------------
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
+    """Начинает процесс знакомства: запрашивает имя пользователя."""
+    # Сбрасываем предыдущее состояние, если было
     await state.clear()
-    user_name = message.from_user.first_name or "друг"
+    # Устанавливаем состояние ожидания имени
+    await state.set_state(NameState.waiting_for_name)
+    # Убираем клавиатуру, чтобы не отвлекать
     await message.answer(
-        f"👋 Привет, {user_name}!\n\n"
-        f"Я — ваш **психологический помощник**, созданный для поддержки и понимания.\n\n"
+        "👋 Добро пожаловать!\n\n"
+        "Как я могу к вам обращаться? Напишите ваше имя.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+
+# -------------------------------------------------------------------
+# ОБРАБОТЧИК ВВОДА ИМЕНИ
+# -------------------------------------------------------------------
+@dp.message(NameState.waiting_for_name)
+async def process_name(message: types.Message, state: FSMContext):
+    """Сохраняет имя пользователя и показывает главное меню с предупреждением."""
+    user_name = message.text.strip()
+
+    # Простая валидация: имя не должно быть слишком длинным
+    if len(user_name) > 50:
+        await message.answer("⚠️ Имя слишком длинное. Пожалуйста, введите покороче.")
+        return
+
+    # Сохраняем имя в контексте (будет доступно в других обработчиках)
+    await state.update_data(user_name=user_name)
+    # Выходим из состояния
+    await state.clear()
+
+    # Приветствуем пользователя по имени и показываем главное меню
+    await message.answer(
+        f"👋 Приятно познакомиться, {user_name}!\n\n"
         f"⚠️ **Важно:**\n"
         f"• Я не заменяю профессионального психолога\n"
-        f"• При серьёзных проблемах обратитесь к специалисту\n"
-        f"• В кризисной ситуации звоните: **8-800-2000-122** (бесплатно, 24/7)\n\n"
-        f"Чем могу помочь сегодня?",
+        f"• При серьёзных проблемах обратитесь к специалисту\n\n"
+        f"💬 Выберите действие на клавиатуре ниже 👇",
         parse_mode="Markdown",
         reply_markup=main_menu_kb
     )
 
 
+# -------------------------------------------------------------------
+# ОБРАБОТЧИК КОМАНДЫ /help
+# -------------------------------------------------------------------
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message, state: FSMContext):
-    """Обновлённая справка с актуальными командами и статусом функций."""
+    """Показывает справку о боте."""
     await state.clear()
-    help_text = (
-        "ℹ️ **Справка по боту • AI-психолог •**\n\n"
-        "**Основные команды:**\n"
-        "/start — Главное меню\n"
-        "/help — Эта справка\n"
-        "/subscribe — Оформить подписку (в разработке)\n"
-        "/status — Проверить статус подписки (в разработке)\n"
-        "/paysupport — По вопросам оплаты (в разработке)\n\n"
-        "**Возможности:**\n"
-        "💬 **Поговорить** — Беседа с ИИ-психологом\n"
-        "   • Лимит: 20 сообщений в день\n"
-        "   • История сохраняется\n"
-        "🌱 **Заземлиться** — Техники для снятия тревоги (в разработке)\n"
-        "📋 **Пройти тест** — Тест на уровень депрессии (в разработке)\n"
-        "👤 **Личный кабинет** — Статистика и история (в разработке)\n"
-        "ℹ️ **О боте** — Информация о проекте\n\n"
-        "⚠️ Бот не заменяет профессионального психолога. "
-        "При серьёзных проблемах обратитесь к специалисту."
-    )
-    await message.answer(help_text, parse_mode="Markdown", reply_markup=main_menu_kb)
+    await message.answer(get_help_text(), parse_mode="Markdown", reply_markup=main_menu_kb)
 
 
 # -------------------------------------------------------------------
-# ЗАГЛУШКИ ДЛЯ КНОПОК
+# ОБРАБОТЧИКИ КНОПОК ГЛАВНОГО МЕНЮ
 # -------------------------------------------------------------------
+@dp.message(F.text == "ℹ️ О боте")
+async def about_bot(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer(get_help_text(), parse_mode="Markdown", reply_markup=main_menu_kb)
+
+
 @dp.message(F.text == "🌱 Заземлиться")
 async def placeholder_grounding(message: types.Message, state: FSMContext):
     await state.clear()
@@ -107,7 +158,8 @@ async def placeholder_grounding(message: types.Message, state: FSMContext):
 @dp.message(F.text == "📋 Пройти тест")
 async def placeholder_test(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer("🛠 Тест Бека будет доступен в следующей версии.", reply_markup=main_menu_kb)
+    await message.answer("🛠 Тест на уровень депрессии будет доступен в следующей версии.",
+                         reply_markup=main_menu_kb)
 
 
 @dp.message(F.text == "👤 Личный кабинет")
@@ -116,61 +168,38 @@ async def placeholder_profile(message: types.Message, state: FSMContext):
     await message.answer("🛠 Личный кабинет в разработке.", reply_markup=main_menu_kb)
 
 
-@dp.message(F.text == "ℹ️ О боте")
-async def about_bot(message: types.Message, state: FSMContext):
-    await state.clear()
-    await message.answer(
-        "🤖 **Психологический помощник**\n\n"
-        "**Что я умею:**\n"
-        "• 💬 Диалог с ИИ-психологом на базе DeepSeek\n"
-        "• 🧠 Запоминаю контекст ваших бесед\n"
-        "• 🆘 Обнаруживаю кризисные ситуации и предлагаю помощь\n"
-        "• 📊 20 бесплатных сообщений в день\n\n"
-        "**Скоро появится:**\n"
-        "• 📋 Тест Бека на уровень депрессии\n"
-        "• 🌱 Техники заземления (дыхание 4-7-8, метод 5-4-3-2-1)\n"
-        "• 👤 Личный кабинет с историей диалогов\n\n"
-        "⚠️ **Помните:** я помогаю, но не заменяю специалиста!",
-        parse_mode="Markdown",
-        reply_markup=main_menu_kb
-    )
-
-
 # -------------------------------------------------------------------
-# ПОДКЛЮЧЕНИЕ ОБРАБОТЧИКОВ ДИАЛОГА
+# ПОДКЛЮЧЕНИЕ МОДУЛЕЙ
 # -------------------------------------------------------------------
 register_dialog_handlers(dp)
+# dp.include_router(admin_router)
 
 
 # -------------------------------------------------------------------
 # ЗАПУСК БОТА
 # -------------------------------------------------------------------
 async def main():
-    # Инициализация базы данных (асинхронная)
     await init_db()
     logger.info("База данных инициализирована")
-
     logger.info("=" * 55)
-    logger.info("        🤖 ПСИХОЛОГИЧЕСКИЙ ПОМОЩНИК v2.0")
+    logger.info("        🤖 AI-ПСИХОЛОГ v2.0")
     logger.info("=" * 55)
     logger.info("📡 СТАТУС СИСТЕМЫ:")
     logger.info("  ✅ Бот успешно запущен")
     logger.info("  ✅ DeepSeek API подключен")
     logger.info("  ✅ База данных SQLite (aiosqlite) инициализирована")
     logger.info("🎯 АКТИВНЫЕ ФУНКЦИИ:")
-    logger.info("  💬 Диалог с ИИ-психологом")
-    logger.info("     └─ Лимит: 20 сообщений/день")
-    logger.info("     └─ Контекст: 20 последних сообщений")
-    logger.info("     └─ Суммаризация каждые 30 сообщений")
-    logger.info("  🆘 Детектор кризисных ситуаций")
+    logger.info("  💬 Диалог с ИИ-психологом (20 сообщений/день)")
+    logger.info("  🧠 Контекст и суммаризация")
+    logger.info("  🆘 Кризис-детектор")
     logger.info("  ℹ️  Информация о боте")
+    logger.info("  🔧 Админ-панель")
     logger.info("🚧 В РАЗРАБОТКЕ:")
-    logger.info("  📋 Тест Бека на депрессию")
     logger.info("  🌱 Техники заземления")
-    logger.info("  👤 Личный кабинет с историей")
+    logger.info("  📋 Тест на депрессию")
+    logger.info("  👤 Личный кабинет")
     logger.info("=" * 55)
     logger.info("⏳ Ожидание входящих сообщений...")
-
     await dp.start_polling(bot)
 
 
