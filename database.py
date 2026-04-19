@@ -315,3 +315,42 @@ async def get_all_user_ids() -> List[int]:
         cursor = await conn.execute("SELECT DISTINCT user_id FROM chat_history")
         rows = await cursor.fetchall()
         return [row[0] for row in rows]
+
+
+async def get_user_info(user_id: int) -> dict:
+    """Возвращает информацию о пользователе: первое сообщение, всего сообщений, лимит на сегодня."""
+    async with aiosqlite.connect(DB_NAME) as conn:
+        # Дата первого сообщения
+        cursor = await conn.execute(
+            "SELECT MIN(timestamp) FROM chat_history WHERE user_id = ?",
+            (user_id,)
+        )
+        first_row = await cursor.fetchone()
+        first_seen = first_row[0] if first_row and first_row[0] else None
+
+        # Общее количество сообщений пользователя
+        cursor = await conn.execute(
+            "SELECT COUNT(*) FROM chat_history WHERE user_id = ? AND role = 'user'",
+            (user_id,)
+        )
+        total_row = await cursor.fetchone()
+        total_messages = total_row[0] if total_row else 0
+
+    # Лимит на сегодня (используем уже существующую функцию)
+    today_count = await get_message_count_today(user_id)
+
+    return {
+        "user_id": user_id,
+        "first_seen": first_seen,
+        "total_messages": total_messages,
+        "messages_today": today_count,
+        "limit": 20,
+        "remaining": max(0, 20 - today_count)
+    }
+
+
+async def reset_user_limit(user_id: int) -> None:
+    """Сбрасывает дневной лимит для пользователя (удаляет запись из message_limits)."""
+    async with aiosqlite.connect(DB_NAME) as conn:
+        await conn.execute("DELETE FROM message_limits WHERE user_id = ?", (user_id,))
+        await conn.commit()

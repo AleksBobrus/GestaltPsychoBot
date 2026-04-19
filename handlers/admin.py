@@ -1,5 +1,5 @@
 # handlers/admin.py
-# Модуль администрирования: статистика, рассылка, админ-панель.
+# Модуль администрирования: статистика, рассылка, информация о пользователе, сброс лимита.
 
 import os
 import asyncio
@@ -11,7 +11,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from keyboards import get_main_menu
 from database import (
-    get_total_users, get_active_users_today, get_total_messages_today, get_all_user_ids
+    get_total_users, get_active_users_today, get_total_messages_today, get_all_user_ids,
+    get_user_info, reset_user_limit
 )
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,8 @@ def is_admin(user_id: int) -> bool:
 def get_admin_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton(text="👤 Информация о пользователе", callback_data="admin_user_info")],
+        [InlineKeyboardButton(text="🔄 Сбросить лимит", callback_data="admin_reset_limit")],
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="🔙 Закрыть", callback_data="admin_close")]
     ]
@@ -42,10 +45,18 @@ def get_admin_keyboard() -> InlineKeyboardMarkup:
 
 
 # -------------------------------------------------------------------
-# FSM ДЛЯ РАССЫЛКИ
+# FSM ДЛЯ АДМИНСКИХ ДЕЙСТВИЙ
 # -------------------------------------------------------------------
+class AdminAction(StatesGroup):
+    waiting_for_user_id = State()      # для информации о пользователе
+
+
+class ResetLimit(StatesGroup):
+    waiting_for_user_id = State()      # для сброса лимита
+
+
 class BroadcastState(StatesGroup):
-    waiting_for_message = State()
+    waiting_for_message = State()      # для рассылки
 
 
 # -------------------------------------------------------------------
@@ -94,6 +105,36 @@ async def admin_stats_callback(callback: types.CallbackQuery):
             logger.error(f"Ошибка при обновлении статистики: {e}")
 
 
+@router.callback_query(F.data == "admin_user_info")
+async def admin_user_info_callback(callback: types.CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён.", show_alert=True)
+        return
+
+    await callback.answer()
+    await state.set_state(AdminAction.waiting_for_user_id)
+    await callback.message.edit_text(
+        "👤 Введите Telegram ID пользователя для получения информации.\n"
+        "Для отмены отправьте /cancel",
+        parse_mode="Markdown"
+    )
+
+
+@router.callback_query(F.data == "admin_reset_limit")
+async def admin_reset_limit_callback(callback: types.CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён.", show_alert=True)
+        return
+
+    await callback.answer()
+    await state.set_state(ResetLimit.waiting_for_user_id)
+    await callback.message.edit_text(
+        "🔄 Введите Telegram ID пользователя, которому нужно сбросить дневной лимит.\n"
+        "Для отмены отправьте /cancel",
+        parse_mode="Markdown"
+    )
+
+
 @router.callback_query(F.data == "admin_broadcast")
 async def admin_broadcast_callback(callback: types.CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
@@ -121,7 +162,72 @@ async def admin_close_callback(callback: types.CallbackQuery):
 
 
 # -------------------------------------------------------------------
-# ОБРАБОТЧИК РАССЫЛКИ
+# ОБРАБОТЧИК ВВОДА ID ДЛЯ ПОЛУЧЕНИЯ ИНФОРМАЦИИ
+# -------------------------------------------------------------------
+@router.message(AdminAction.waiting_for_user_id)
+async def process_user_info(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("⛔ Доступ запрещён.")
+        await state.clear()
+        return
+
+    if message.text == "/cancel":
+        await state.clear()
+        await message.answer("❌ Действие отменено.", reply_markup=get_main_menu(message.from_user.id))
+        return
+
+    try:
+        user_id = int(message.text.strip())
+    except ValueError:
+        await message.answer("⚠️ Некорректный ID. Введите целое число.")
+        return
+
+    info = await get_user_info(user_id)
+    if info["first_seen"] is None:
+        await message.answer(f"ℹ️ Пользователь с ID {user_id} не найден в базе.")
+    else:
+        first_seen_str = info["first_seen"][:19] if info["first_seen"] else "—"
+        text = (
+            f"👤 **Информация о пользователе {user_id}**\n\n"
+            f"📅 Первое сообщение: {first_seen_str}\n"
+            f"💬 Всего сообщений: {info['total_messages']}\n"
+            f"📊 Сегодня: {info['messages_today']}/{info['limit']} (осталось {info['remaining']})\n"
+        )
+        await message.answer(text, parse_mode="Markdown")
+
+    await state.clear()
+    await message.answer("🔧 Возврат в админ-панель.", reply_markup=get_main_menu(message.from_user.id))
+
+
+# -------------------------------------------------------------------
+# ОБРАБОТЧИК ВВОДА ID ДЛЯ СБРОСА ЛИМИТА
+# -------------------------------------------------------------------
+@router.message(ResetLimit.waiting_for_user_id)
+async def process_reset_limit(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("⛔ Доступ запрещён.")
+        await state.clear()
+        return
+
+    if message.text == "/cancel":
+        await state.clear()
+        await message.answer("❌ Действие отменено.", reply_markup=get_main_menu(message.from_user.id))
+        return
+
+    try:
+        user_id = int(message.text.strip())
+    except ValueError:
+        await message.answer("⚠️ Некорректный ID. Введите целое число.")
+        return
+
+    await reset_user_limit(user_id)
+    await message.answer(f"✅ Дневной лимит для пользователя {user_id} сброшен.")
+    await state.clear()
+    await message.answer("🔧 Возврат в админ-панель.", reply_markup=get_main_menu(message.from_user.id))
+
+
+# -------------------------------------------------------------------
+# ОБРАБОТЧИК РАССЫЛКИ (без изменений)
 # -------------------------------------------------------------------
 @router.message(BroadcastState.waiting_for_message)
 async def process_broadcast(message: types.Message, state: FSMContext, bot: Bot):
@@ -158,7 +264,7 @@ async def process_broadcast(message: types.Message, state: FSMContext, bot: Bot)
             else:
                 failed += 1
                 logger.warning(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
-        await asyncio.sleep(0.05)  # уважаем лимиты Telegram
+        await asyncio.sleep(0.05)
 
     report = (
         f"📢 **Рассылка завершена**\n\n"
