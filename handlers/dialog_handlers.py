@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from aiogram import types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from openai import APIError, APIConnectionError, RateLimitError, AuthenticationError
 from keyboards import dialog_kb, main_menu_kb
 from ai_client import get_ai_response, create_summary
 from database import (
@@ -57,7 +58,7 @@ async def exit_dialog(message: types.Message, state: FSMContext):
 # -------------------------------------------------------------------
 # ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ В ДИАЛОГЕ
 # -------------------------------------------------------------------
-async def process_dialog(message: types.Message, state: FSMContext):
+async def process_dialog(message: types.Message, state: FSMContext): # noqa
     """
     Главная логика диалога:
     1. Атомарная проверка и увеличение дневного лимита.
@@ -149,19 +150,20 @@ async def process_dialog(message: types.Message, state: FSMContext):
     # Используем обычный вызов, так как стриминг пока нестабилен
     try:
         reply = await get_ai_response(history)
+    except (APIError, APIConnectionError, RateLimitError, AuthenticationError) as e:
+        logger.error(f"Ошибка DeepSeek API: {e}")
+        await message.answer("😔 Сервис ИИ временно недоступен. Попробуйте позже.", reply_markup=dialog_kb)
+        return
     except Exception as e:
-        logger.exception(f"Ошибка при вызове DeepSeek API: {e}")
-        await message.answer(
-            "😔 Произошла ошибка при обращении к ИИ. Пожалуйста, попробуйте позже.",
-            reply_markup=dialog_kb
-        )
+        logger.exception(f"Неожиданная ошибка при вызове AI - {e}")
+        await message.answer("😔 Произошла внутренняя ошибка. Мы уже работаем над исправлением.", reply_markup=dialog_kb)
         return
 
     # ---------- 8. ОТПРАВКА ОТВЕТА ПОЛЬЗОВАТЕЛЮ ----------
     try:
         # Пытаемся отправить с Markdown-разметкой
         await message.answer(reply, parse_mode="Markdown", reply_markup=dialog_kb)
-    except Exception:
+    except Exception:   # noqa
         # Если Markdown сломался, отправляем без форматирования
         await message.answer(reply, reply_markup=dialog_kb)
 

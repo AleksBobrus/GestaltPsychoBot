@@ -45,7 +45,7 @@ dp = Dispatcher()
 # ГЛОБАЛЬНЫЙ ОБРАБОТЧИК ОШИБОК
 # -------------------------------------------------------------------
 @dp.errors()
-async def errors_handler(update: types.Update, exception: Exception):
+async def errors_handler(_: types.Update, exception: Exception):
     """Ловит все необработанные исключения и логирует их."""
     logger.exception("Критическая ошибка при обработке обновления", exc_info=exception)
     return True

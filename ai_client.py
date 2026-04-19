@@ -52,7 +52,7 @@ async def get_ai_response(messages_history: list) -> str:
         logger.info("Отправка запроса в DeepSeek API (без стрима)...")
         response = await client.chat.completions.create(
             model="deepseek-chat",
-            messages=full_messages,
+            messages=full_messages, # type: ignore
             temperature=0.7,   # уровень креативности (0 – точно, 1 – творчески)
             max_tokens=1000    # максимальная длина ответа
         )
@@ -76,14 +76,14 @@ async def get_ai_response(messages_history: list) -> str:
         logger.error("Не удалось подключиться к DeepSeek API.")
         return "⚠️ Проблемы с подключением к серверу ИИ. Проверьте интернет или повторите позже."
 
-    except APIError as e:
+    except APIError:
         # Любая другая ошибка API (например, 500 Internal Server Error)
-        logger.error(f"Ошибка DeepSeek API: {e}")
+        logger.error(f"Ошибка DeepSeek API")
         return "⚠️ Ошибка на стороне сервера ИИ. Попробуйте позже."
 
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         # Непредвиденная ошибка (логируем с traceback)
-        logger.exception("Неожиданная ошибка при вызове DeepSeek API")
+        logger.exception(f"Неожиданная ошибка при вызове DeepSeek API - {e}")
         return "😔 Произошла внутренняя ошибка. Мы уже работаем над её исправлением."
 
 
@@ -120,7 +120,7 @@ async def create_summary(messages: list) -> str:
         logger.info("Создание суммаризации через DeepSeek...")
         response = await client.chat.completions.create(
             model="deepseek-chat",
-            messages=[
+            messages=[  # type: ignore
                 {"role": "system", "content": summary_prompt},
                 {"role": "user", "content": f"Диалог для суммаризации:\n\n{conversation_text}"}
             ],

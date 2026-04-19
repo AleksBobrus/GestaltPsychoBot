@@ -4,7 +4,7 @@
 
 import aiosqlite
 from datetime import datetime, date
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Tuple
 
 DB_NAME = "dialog_history.db"
 
