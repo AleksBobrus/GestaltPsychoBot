@@ -9,7 +9,7 @@ from aiogram import types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from openai import APIError, APIConnectionError, RateLimitError, AuthenticationError
-from keyboards import dialog_kb, main_menu_kb
+from keyboards import dialog_kb, get_main_menu
 from ai_client import get_ai_response, create_summary
 from database import (
     save_message, get_recent_history,
@@ -52,7 +52,7 @@ async def exit_dialog(message: types.Message, state: FSMContext):
     Сбрасывает состояние и возвращает главное меню.
     """
     await state.clear()
-    await message.answer("Диалог завершён.", reply_markup=main_menu_kb)
+    await message.answer("Диалог завершён.", reply_markup=get_main_menu(message.from_user.id))
 
 
 # -------------------------------------------------------------------

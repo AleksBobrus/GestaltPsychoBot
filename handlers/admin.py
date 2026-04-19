@@ -9,7 +9,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from keyboards import main_menu_kb
+from keyboards import get_main_menu
 from database import (
     get_total_users, get_active_users_today, get_total_messages_today, get_all_user_ids
 )
@@ -132,14 +132,14 @@ async def process_broadcast(message: types.Message, state: FSMContext, bot: Bot)
 
     if message.text == "/cancel":
         await state.clear()
-        await message.answer("❌ Рассылка отменена.", reply_markup=main_menu_kb)
+        await message.answer("❌ Рассылка отменена.", reply_markup=get_main_menu(message.from_user.id))
         return
 
     await state.clear()
 
     user_ids = await get_all_user_ids()
     if not user_ids:
-        await message.answer("⚠️ Нет пользователей для рассылки.", reply_markup=main_menu_kb)
+        await message.answer("⚠️ Нет пользователей для рассылки.", reply_markup=get_main_menu(message.from_user.id))
         return
 
     success = 0
@@ -166,7 +166,7 @@ async def process_broadcast(message: types.Message, state: FSMContext, bot: Bot)
         f"🚫 Заблокировали бота: {blocked}\n"
         f"❌ Ошибок: {failed}"
     )
-    await message.answer(report, parse_mode="Markdown", reply_markup=main_menu_kb)
+    await message.answer(report, parse_mode="Markdown", reply_markup=get_main_menu(message.from_user.id))
 
 
 # -------------------------------------------------------------------

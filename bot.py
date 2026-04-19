@@ -11,7 +11,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import ReplyKeyboardRemove
-from keyboards import main_menu_kb
+from keyboards import get_main_menu, dialog_kb
 from handlers.dialog_handlers import register_dialog_handlers
 from handlers.admin import router as admin_router
 from database import init_db
@@ -126,7 +126,7 @@ async def process_name(message: types.Message, state: FSMContext):
         f"• При серьёзных проблемах обратитесь к специалисту\n\n"
         f"💬 Выберите действие на клавиатуре ниже 👇",
         parse_mode="Markdown",
-        reply_markup=main_menu_kb
+        reply_markup=get_main_menu(message.from_user.id)
     )
 
 
@@ -137,7 +137,7 @@ async def process_name(message: types.Message, state: FSMContext):
 async def cmd_help(message: types.Message, state: FSMContext):
     """Показывает справку о боте."""
     await state.clear()
-    await message.answer(get_help_text(), parse_mode="Markdown", reply_markup=main_menu_kb)
+    await message.answer(get_help_text(), parse_mode="Markdown", reply_markup=get_main_menu(message.from_user.id))
 
 
 # -------------------------------------------------------------------
@@ -146,26 +146,26 @@ async def cmd_help(message: types.Message, state: FSMContext):
 @dp.message(F.text == "ℹ️ О боте")
 async def about_bot(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer(get_help_text(), parse_mode="Markdown", reply_markup=main_menu_kb)
+    await message.answer(get_help_text(), parse_mode="Markdown", reply_markup=get_main_menu(message.from_user.id))
 
 
 @dp.message(F.text == "🌱 Заземлиться")
 async def placeholder_grounding(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer("🛠 Техники заземления появятся позже.", reply_markup=main_menu_kb)
+    await message.answer("🛠 Техники заземления появятся позже.", reply_markup=get_main_menu(message.from_user.id))
 
 
 @dp.message(F.text == "📋 Пройти тест")
 async def placeholder_test(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("🛠 Тест на уровень депрессии будет доступен в следующей версии.",
-                         reply_markup=main_menu_kb)
+                         reply_markup=get_main_menu(message.from_user.id))
 
 
 @dp.message(F.text == "👤 Личный кабинет")
 async def placeholder_profile(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer("🛠 Личный кабинет в разработке.", reply_markup=main_menu_kb)
+    await message.answer("🛠 Личный кабинет в разработке.", reply_markup=get_main_menu(message.from_user.id))
 
 
 # -------------------------------------------------------------------
