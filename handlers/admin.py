@@ -87,7 +87,11 @@ async def admin_stats_callback(callback: types.CallbackQuery):
         f"💬 Сообщений сегодня: **{messages_today}**\n"
     )
 
-    await callback.message.edit_text(stats_text, parse_mode="Markdown", reply_markup=get_admin_keyboard())
+    try:
+        await callback.message.edit_text(stats_text, parse_mode="Markdown", reply_markup=get_admin_keyboard())
+    except Exception as e:
+        if "message is not modified" not in str(e):
+            logger.error(f"Ошибка при обновлении статистики: {e}")
 
 
 @router.callback_query(F.data == "admin_broadcast")
