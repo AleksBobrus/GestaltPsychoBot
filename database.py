@@ -275,3 +275,43 @@ async def count_user_messages(user_id: int) -> int:
         """, (user_id,))
         row = await cursor.fetchone()
         return row[0] if row else 0
+
+
+async def get_total_users() -> int:
+    """Возвращает общее количество уникальных пользователей."""
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute("SELECT COUNT(DISTINCT user_id) FROM chat_history")
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+
+async def get_active_users_today() -> int:
+    """Возвращает количество пользователей, отправивших сообщения сегодня."""
+    today = date.today().isoformat()
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute("""
+            SELECT COUNT(DISTINCT user_id) FROM chat_history
+            WHERE DATE(timestamp) = ?
+        """, (today,))
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+
+async def get_total_messages_today() -> int:
+    """Возвращает общее количество сообщений за сегодня."""
+    today = date.today().isoformat()
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute("""
+            SELECT COUNT(*) FROM chat_history
+            WHERE DATE(timestamp) = ? AND role = 'user'
+        """, (today,))
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+
+async def get_all_user_ids() -> List[int]:
+    """Возвращает список всех уникальных user_id для рассылки."""
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute("SELECT DISTINCT user_id FROM chat_history")
+        rows = await cursor.fetchall()
+        return [row[0] for row in rows]

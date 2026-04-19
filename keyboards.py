@@ -4,19 +4,18 @@
 # KeyboardButton – одна кнопка на такой клавиатуре.
 
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+# from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # -------------------------------------------------------------------
 # КЛАВИАТУРА ГЛАВНОГО МЕНЮ
 # -------------------------------------------------------------------
-# Создаём клавиатуру с пятью кнопками.
 # Это обычная reply-клавиатура, которая появляется вместо поля ввода.
 # Кнопки расположены в два ряда по две и один ряд с одной кнопкой.
 main_menu_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="💬 Поговорить"), KeyboardButton(text="🌱 Заземлиться")],
         [KeyboardButton(text="📋 Пройти тест"), KeyboardButton(text="👤 Личный кабинет")],
-        [KeyboardButton(text="ℹ️ О боте")]
+        [KeyboardButton(text="ℹ️ О боте"), KeyboardButton(text="🔧 Админ-панель")]
     ],
     resize_keyboard=True
 )

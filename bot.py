@@ -13,7 +13,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import ReplyKeyboardRemove
 from keyboards import main_menu_kb
 from handlers.dialog_handlers import register_dialog_handlers
-# from handlers.admin import router as admin_router
+from handlers.admin import router as admin_router
 from database import init_db
 
 # -------------------------------------------------------------------
@@ -172,7 +172,7 @@ async def placeholder_profile(message: types.Message, state: FSMContext):
 # ПОДКЛЮЧЕНИЕ МОДУЛЕЙ
 # -------------------------------------------------------------------
 register_dialog_handlers(dp)
-# dp.include_router(admin_router)
+dp.include_router(admin_router)
 
 
 # -------------------------------------------------------------------
