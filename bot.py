@@ -11,10 +11,10 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import ReplyKeyboardRemove
-from keyboards import get_main_menu, dialog_kb
+from keyboards import get_main_menu
 from handlers.dialog_handlers import register_dialog_handlers
 from handlers.admin import router as admin_router
-from database import init_db
+from database import init_db, save_user_profile
 
 # -------------------------------------------------------------------
 # НАСТРОЙКА ЛОГИРОВАНИЯ
@@ -88,11 +88,8 @@ def get_help_text() -> str:
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     """Начинает процесс знакомства: запрашивает имя пользователя."""
-    # Сбрасываем предыдущее состояние, если было
     await state.clear()
-    # Устанавливаем состояние ожидания имени
     await state.set_state(NameState.waiting_for_name)
-    # Убираем клавиатуру, чтобы не отвлекать
     await message.answer(
         "👋 Добро пожаловать!\n\n"
         "Как я могу к вам обращаться? Напишите ваше имя.",
@@ -105,20 +102,26 @@ async def cmd_start(message: types.Message, state: FSMContext):
 # -------------------------------------------------------------------
 @dp.message(NameState.waiting_for_name)
 async def process_name(message: types.Message, state: FSMContext):
-    """Сохраняет имя пользователя и показывает главное меню с предупреждением."""
+    """Сохраняет имя пользователя в БД и показывает главное меню."""
     user_name = message.text.strip()
 
-    # Простая валидация: имя не должно быть слишком длинным
     if len(user_name) > 50:
         await message.answer("⚠️ Имя слишком длинное. Пожалуйста, введите покороче.")
         return
 
-    # Сохраняем имя в контексте (будет доступно в других обработчиках)
+    # Сохраняем в FSM
     await state.update_data(user_name=user_name)
-    # Выходим из состояния
+
+    # Сохраняем в БД для админ-панели
+    telegram_name = message.from_user.full_name or message.from_user.first_name or "Без имени"
+    await save_user_profile(
+        user_id=message.from_user.id,
+        telegram_name=telegram_name,
+        custom_name=user_name
+    )
+
     await state.clear()
 
-    # Приветствуем пользователя по имени и показываем главное меню
     await message.answer(
         f"👋 Приятно познакомиться, {user_name}!\n\n"
         f"⚠️ **Важно:**\n"
@@ -135,7 +138,6 @@ async def process_name(message: types.Message, state: FSMContext):
 # -------------------------------------------------------------------
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message, state: FSMContext):
-    """Показывает справку о боте."""
     await state.clear()
     await message.answer(get_help_text(), parse_mode="Markdown", reply_markup=get_main_menu(message.from_user.id))
 

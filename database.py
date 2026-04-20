@@ -1,6 +1,7 @@
 # database.py
 # Асинхронный модуль для работы с SQLite (aiosqlite).
-# Сохраняет всю функциональность: историю диалогов, тест Бека, лимиты, суммаризации.
+# Сохраняет всю функциональность: историю диалогов, тест Бека, лимиты, суммаризации,
+# профили пользователей.
 
 import aiosqlite
 from datetime import datetime, date
@@ -61,6 +62,16 @@ async def init_db() -> None:
             )
         """)
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_summaries_user_id ON summaries(user_id)")
+
+        # НОВАЯ ТАБЛИЦА: профили пользователей (имя из Telegram и кастомное имя)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                telegram_name TEXT,
+                custom_name TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
         await conn.commit()
 
@@ -141,7 +152,6 @@ async def increment_message_count(user_id: int) -> int:
     """
     today_str = date.today().isoformat()
     async with aiosqlite.connect(DB_NAME) as conn:
-        # UPSERT с условным сбросом
         await conn.execute("""
             INSERT INTO message_limits (user_id, daily_count, reset_date)
             VALUES (?, 1, ?)
@@ -168,21 +178,15 @@ async def can_send_message(user_id: int, limit: int = 20) -> bool:
     return count < limit
 
 
-# -------------------------------------------------------------------
-# НОВАЯ АТОМАРНАЯ ФУНКЦИЯ ДЛЯ ПРОВЕРКИ И ИНКРЕМЕНТА ЛИМИТА
-# -------------------------------------------------------------------
 async def try_increment_and_check_limit(user_id: int, limit: int = 20) -> Tuple[bool, int]:
     """
     Атомарно проверяет, не превышен ли лимит, и увеличивает счётчик.
     Возвращает:
         (True, new_count) – если сообщение разрешено,
         (False, current_count) – если лимит уже исчерпан.
-
-    Использует транзакцию BEGIN IMMEDIATE для предотвращения гонок.
     """
     today_str = date.today().isoformat()
     async with aiosqlite.connect(DB_NAME) as conn:
-        # BEGIN IMMEDIATE блокирует запись для других соединений до COMMIT
         await conn.execute("BEGIN IMMEDIATE")
         try:
             cursor = await conn.execute(
@@ -277,12 +281,54 @@ async def count_user_messages(user_id: int) -> int:
         return row[0] if row else 0
 
 
+# -------------------------------------------------------------------
+# СТАТИСТИКА (ДЛЯ АДМИН-ПАНЕЛИ)
+# -------------------------------------------------------------------
 async def get_total_users() -> int:
-    """Возвращает общее количество уникальных пользователей."""
+    """Возвращает общее количество уникальных пользователей (из chat_history)."""
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("SELECT COUNT(DISTINCT user_id) FROM chat_history")
         row = await cursor.fetchone()
         return row[0] if row else 0
+
+
+async def get_user_info(user_id: int) -> dict:
+    """Возвращает информацию о пользователе: первое сообщение, всего сообщений, лимит на сегодня."""
+    async with aiosqlite.connect(DB_NAME) as conn:
+        # Дата первого сообщения
+        cursor = await conn.execute(
+            "SELECT MIN(timestamp) FROM chat_history WHERE user_id = ?",
+            (user_id,)
+        )
+        first_row = await cursor.fetchone()
+        first_seen = first_row[0] if first_row and first_row[0] else None
+
+        # Общее количество сообщений пользователя (роль 'user')
+        cursor = await conn.execute(
+            "SELECT COUNT(*) FROM chat_history WHERE user_id = ? AND role = 'user'",
+            (user_id,)
+        )
+        total_row = await cursor.fetchone()
+        total_messages = total_row[0] if total_row else 0
+
+    # Лимит на сегодня (используем уже существующую функцию)
+    today_count = await get_message_count_today(user_id)
+
+    return {
+        "user_id": user_id,
+        "first_seen": first_seen,
+        "total_messages": total_messages,
+        "messages_today": today_count,
+        "limit": 20,
+        "remaining": max(0, 20 - today_count)
+    }
+
+
+async def reset_user_limit(user_id: int) -> None:
+    """Сбрасывает дневной лимит для пользователя (удаляет запись из message_limits)."""
+    async with aiosqlite.connect(DB_NAME) as conn:
+        await conn.execute("DELETE FROM message_limits WHERE user_id = ?", (user_id,))
+        await conn.commit()
 
 
 async def get_active_users_today() -> int:
@@ -317,40 +363,56 @@ async def get_all_user_ids() -> List[int]:
         return [row[0] for row in rows]
 
 
-async def get_user_info(user_id: int) -> dict:
-    """Возвращает информацию о пользователе: первое сообщение, всего сообщений, лимит на сегодня."""
+# -------------------------------------------------------------------
+# ПРОФИЛИ ПОЛЬЗОВАТЕЛЕЙ (ДЛЯ АДМИН-ПАНЕЛИ)
+# -------------------------------------------------------------------
+async def save_user_profile(user_id: int, telegram_name: str, custom_name: str) -> None:
+    """Сохраняет или обновляет имя пользователя."""
     async with aiosqlite.connect(DB_NAME) as conn:
-        # Дата первого сообщения
-        cursor = await conn.execute(
-            "SELECT MIN(timestamp) FROM chat_history WHERE user_id = ?",
-            (user_id,)
-        )
-        first_row = await cursor.fetchone()
-        first_seen = first_row[0] if first_row and first_row[0] else None
-
-        # Общее количество сообщений пользователя
-        cursor = await conn.execute(
-            "SELECT COUNT(*) FROM chat_history WHERE user_id = ? AND role = 'user'",
-            (user_id,)
-        )
-        total_row = await cursor.fetchone()
-        total_messages = total_row[0] if total_row else 0
-
-    # Лимит на сегодня (используем уже существующую функцию)
-    today_count = await get_message_count_today(user_id)
-
-    return {
-        "user_id": user_id,
-        "first_seen": first_seen,
-        "total_messages": total_messages,
-        "messages_today": today_count,
-        "limit": 20,
-        "remaining": max(0, 20 - today_count)
-    }
-
-
-async def reset_user_limit(user_id: int) -> None:
-    """Сбрасывает дневной лимит для пользователя (удаляет запись из message_limits)."""
-    async with aiosqlite.connect(DB_NAME) as conn:
-        await conn.execute("DELETE FROM message_limits WHERE user_id = ?", (user_id,))
+        await conn.execute("""
+            INSERT INTO users (user_id, telegram_name, custom_name)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                telegram_name = excluded.telegram_name,
+                custom_name = excluded.custom_name
+        """, (user_id, telegram_name, custom_name))
         await conn.commit()
+
+
+async def get_user_custom_name(user_id: int) -> str | None:
+    """Возвращает сохранённое имя пользователя."""
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute(
+            "SELECT custom_name FROM users WHERE user_id = ?", (user_id,)
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
+
+async def get_all_users(limit: int = 50, offset: int = 0) -> List[Dict]:
+    """Возвращает список пользователей с пагинацией."""
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute("""
+            SELECT user_id, telegram_name, custom_name, created_at
+            FROM users
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        """, (limit, offset))
+        rows = await cursor.fetchall()
+        return [
+            {
+                "user_id": row[0],
+                "telegram_name": row[1],
+                "custom_name": row[2],
+                "created_at": row[3]
+            }
+            for row in rows
+        ]
+
+
+async def get_total_users_count() -> int:
+    """Общее количество записей в таблице users."""
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute("SELECT COUNT(*) FROM users")
+        row = await cursor.fetchone()
+        return row[0] if row else 0
