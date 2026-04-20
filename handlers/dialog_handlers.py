@@ -4,6 +4,9 @@
 # вызов DeepSeek API (без стриминга), суммаризацию и сохранение истории.
 
 import logging
+import os
+from dotenv import load_dotenv
+
 from datetime import datetime, timedelta
 from aiogram import types, F
 from aiogram.fsm.context import FSMContext
@@ -17,6 +20,9 @@ from database import (
     count_user_messages, get_messages_for_summary, save_summary, get_all_summaries
 )
 from crisis_detector import detect_crisis, get_crisis_response
+
+load_dotenv()
+CRISIS_ENABLED = os.getenv("CRISIS_DETECTOR_ENABLED", "True").lower() == "true"
 
 # Логгер для этого модуля
 logger = logging.getLogger(__name__)
@@ -96,20 +102,22 @@ async def process_dialog(message: types.Message, state: FSMContext): # noqa
         )
         return  # прерываем обработку
 
-    # ---------- 2. ДЕТЕКЦИЯ КРИЗИСНЫХ ФРАЗ ----------
+    # ---------- 2. ДЕТЕКЦИЯ КРИЗИСНЫХ ФРАЗ (управляется через CRISIS_DETECTOR_ENABLED) ----------
     # Проверяем, не содержит ли сообщение маркеров суицидальных мыслей и т.п.
-    is_crisis, matched_phrase = detect_crisis(user_text)
-    if is_crisis:
-        logger.warning(f"Обнаружена кризисная фраза: '{matched_phrase}'")
-        await message.answer(
-            get_crisis_response(),
-            parse_mode="Markdown",
-            reply_markup=dialog_kb
-        )
-        # Сохраняем сообщение пользователя и метку о кризисе, но не отправляем в ИИ
-        await save_message(user_id, "user", user_text)
-        await save_message(user_id, "system", "[CRISIS DETECTED]")
-        return
+
+    if CRISIS_ENABLED:
+        is_crisis, matched_phrase = detect_crisis(user_text)
+        if is_crisis:
+            logger.warning(f"Обнаружена кризисная фраза: '{matched_phrase}'")
+            await message.answer(
+                get_crisis_response(),
+                parse_mode="Markdown",
+                reply_markup=dialog_kb
+            )
+            # Сохраняем сообщение пользователя и метку о кризисе, но не отправляем в ИИ
+            await save_message(user_id, "user", user_text)
+            await save_message(user_id, "system", "[CRISIS DETECTED]")
+            return
 
     # ---------- 3. СОХРАНЕНИЕ СООБЩЕНИЯ ПОЛЬЗОВАТЕЛЯ ----------
     await save_message(user_id, "user", user_text)
