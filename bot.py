@@ -1,13 +1,15 @@
 # bot.py
 # Главный файл запуска Telegram-бота «AI-психолог».
-# Добавлен запрос имени пользователя при первом запуске и сохранение username.
+# Реализована реферальная система с бонусами:
+#   - Без реферала: +20 сообщений при регистрации.
+#   - По реферальной ссылке: приглашённый получает +100, пригласивший +100.
 
 import asyncio
 import os
 import logging
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import ReplyKeyboardRemove
@@ -15,7 +17,10 @@ from keyboards import get_main_menu
 from handlers.dialog_handlers import register_dialog_handlers
 from handlers.profile_handlers import router as profile_router
 from handlers.admin import router as admin_router
-from database import init_db, save_user_profile
+from database import (
+    init_db, save_user_profile, add_balance, get_balance,
+    add_referral, has_pending_referral_bonus, mark_referral_bonus_given, get_inviter_id
+)
 
 # -------------------------------------------------------------------
 # НАСТРОЙКА ЛОГИРОВАНИЯ
@@ -47,7 +52,6 @@ dp = Dispatcher()
 # -------------------------------------------------------------------
 @dp.errors()
 async def errors_handler(_: types.Update, exception: Exception):
-    """Ловит все необработанные исключения и логирует их."""
     logger.exception("Критическая ошибка при обработке обновления", exc_info=exception)
     return True
 
@@ -63,48 +67,60 @@ class NameState(StatesGroup):
 # ЕДИНАЯ ФУНКЦИЯ СПРАВКИ
 # -------------------------------------------------------------------
 def get_help_text() -> str:
-    """Возвращает текст с информацией о боте (актуальная версия 3.0.0)."""
+    """Возвращает текст с информацией о боте (версия 3.1.0)."""
     return (
         "🤖 **• AI-психолог •**\n"
-        "Версия: **3.0.0**\n\n"
+        "Версия: **3.1.0**\n\n"
         "AI-психолог — это виртуальный помощник для поддержки ментального благополучия. "
         "Бот использует технологии искусственного интеллекта, чтобы выслушать, "
         "помочь разобраться в чувствах и предложить полезные техники.\n\n"
         "✨ **Актуальные возможности:**\n"
-        "• 💬 **Поговорить** — беседа с ИИ-психологом (20 сообщений/день)\n"
-        "• 👤 **Личный кабинет** — статистика, история тестов, остаток сообщений\n"
+        "• 💬 **Поговорить** — беседа с ИИ-психологом (баланс сообщений)\n"
+        "• 👤 **Личный кабинет** — баланс, история тестов, рефералы\n"
+        "• 🎁 **Пригласи друга** — получайте +100 сообщений за каждого друга\n"
         "• 🧠 **Контекст диалога** — запоминание предыдущих бесед\n"
         "• 🆘 **Кризис-детектор** — распознавание тревожных фраз и предложение помощи\n\n"
         "🚧 **В планах:**\n"
         "• 📋 Тест на уровень депрессии (шкала Бека)\n"
-        "• 🎁 Приглашение друга и покупки\n\n"
+        "• 🛒 Покупка сообщений\n\n"
         "⚠️ **Важно:** бот не заменяет профессионального психолога. "
         "При серьёзных проблемах необходимо обратиться к специалисту."
     )
 
 
 # -------------------------------------------------------------------
-# ОБРАБОТЧИК КОМАНДЫ /start (ЗАПРОС ИМЕНИ)
+# ОБРАБОТЧИК КОМАНДЫ /start (СОХРАНЕНИЕ РЕФЕРАЛЬНОЙ СВЯЗИ)
 # -------------------------------------------------------------------
 @dp.message(Command("start"))
-async def cmd_start(message: types.Message, state: FSMContext):
-    """При первом запуске сразу сохраняет базовый профиль и запрашивает имя."""
+async def cmd_start(message: types.Message, state: FSMContext, command: CommandObject):
+    """
+    При первом запуске:
+      - Сохраняет базовый профиль (без имени).
+      - Если передан реферальный параметр ?start=ref123456, сохраняет связь.
+      - Запрашивает имя.
+    """
     await state.clear()
 
     user_id = message.from_user.id
     telegram_name = message.from_user.full_name or message.from_user.first_name or "Без имени"
     username = message.from_user.username
 
-    # Сразу сохраняем профиль (без custom_name)
-    print(f"[DEBUG] Saving user {user_id} at /start")
-    await save_user_profile(
-        user_id=user_id,
-        telegram_name=telegram_name,
-        custom_name=None,  # будет обновлено позже
-        username=username
-    )
-    print(f"[DEBUG] User {user_id} saved")
+    # Сохраняем профиль в таблицу users (пока без custom_name)
+    await save_user_profile(user_id, telegram_name, None, username)
 
+    # Обработка реферальной ссылки (только сохранение связи)
+    args = command.args
+    if args and args.startswith("ref"):
+        try:
+            inviter_id = int(args[3:])
+            if inviter_id != user_id:
+                added = await add_referral(inviter_id, user_id)
+                if added:
+                    print(f"[REFERRAL] Пользователь {user_id} приглашён пользователем {inviter_id}")
+        except ValueError:
+            pass
+
+    # Запрашиваем имя
     await state.set_state(NameState.waiting_for_name)
     await message.answer(
         "👋 Добро пожаловать!\n\n"
@@ -114,33 +130,57 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
 
 # -------------------------------------------------------------------
-# ОБРАБОТЧИК ВВОДА ИМЕНИ
+# ОБРАБОТЧИК ВВОДА ИМЕНИ (НАЧИСЛЕНИЕ БАЛАНСА И РЕФЕРАЛЬНЫХ БОНУСОВ)
 # -------------------------------------------------------------------
 @dp.message(NameState.waiting_for_name)
 async def process_name(message: types.Message, state: FSMContext):
-    """Обновляет custom_name, начисляет стартовый баланс и показывает главное меню."""
+    """
+    После ввода имени:
+      - Обновляет custom_name.
+      - Если баланс равен 0 (первая регистрация), начисляет стартовые сообщения:
+          * без реферала: 20
+          * по реферальной ссылке: 100 (вместо 20)
+      - Если пользователь был приглашён и бонус ещё не выплачен:
+          * начисляет пригласившему 100 сообщений
+          * отмечает бонус как выданный.
+    """
     user_name = message.text.strip()
-
     if len(user_name) > 50:
         await message.answer("⚠️ Имя слишком длинное. Пожалуйста, введите покороче.")
         return
 
     await state.update_data(user_name=user_name)
 
-    # Обновляем профиль, добавляя custom_name
+    # Обновляем профиль (добавляем custom_name)
     telegram_name = message.from_user.full_name or message.from_user.first_name or "Без имени"
     username = message.from_user.username
-    await save_user_profile(
-        user_id=message.from_user.id,
-        telegram_name=telegram_name,
-        custom_name=user_name,
-        username=username
-    )
+    await save_user_profile(message.from_user.id, telegram_name, user_name, username)
 
-    # Начисляем стартовые 20 сообщений (новая модель баланса)
-    from database import add_balance
-    new_balance = await add_balance(message.from_user.id, 20)
-    print(f"[DEBUG] Пользователю {message.from_user.id} начислено 20 сообщений, баланс: {new_balance}")
+    user_id = message.from_user.id
+
+    # --- НАЧИСЛЕНИЕ СТАРТОВОГО БАЛАНСА (только если баланс равен 0) ---
+    current_balance = await get_balance(user_id)
+    if current_balance == 0:
+        # Проверяем, пришёл ли пользователь по реферальной ссылке
+        inviter_id = await get_inviter_id(user_id)
+        if inviter_id is not None:
+            # Пользователь приглашён – даём 100 сообщений
+            await add_balance(user_id, 100)
+            print(f"[BALANCE] 100 стартовых сообщений начислено пользователю {user_id} (реферал)")
+        else:
+            # Обычная регистрация – 20 сообщений
+            await add_balance(user_id, 20)
+            print(f"[BALANCE] 20 стартовых сообщений начислено пользователю {user_id}")
+
+    # --- ПРОВЕРКА РЕФЕРАЛЬНОГО БОНУСА ДЛЯ ПРИГЛАСИВШЕГО ---
+    # Если текущий пользователь был приглашён и бонус ещё не выплачен
+    if await has_pending_referral_bonus(user_id):
+        inviter_id = await get_inviter_id(user_id)
+        if inviter_id:
+            # Пригласивший получает 100 сообщений
+            await add_balance(inviter_id, 100)
+            await mark_referral_bonus_given(user_id)
+            print(f"[REFERRAL] Бонус 100 сообщений начислен пользователю {inviter_id} за приглашение {user_id}")
 
     await state.clear()
 
@@ -154,8 +194,9 @@ async def process_name(message: types.Message, state: FSMContext):
         reply_markup=get_main_menu(message.from_user.id)
     )
 
+
 # -------------------------------------------------------------------
-# ОБРАБОТЧИК КОМАНДЫ /help
+# ОСТАЛЬНЫЕ ОБРАБОТЧИКИ (БЕЗ ИЗМЕНЕНИЙ)
 # -------------------------------------------------------------------
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message, state: FSMContext):
@@ -163,9 +204,6 @@ async def cmd_help(message: types.Message, state: FSMContext):
     await message.answer(get_help_text(), parse_mode="Markdown", reply_markup=get_main_menu(message.from_user.id))
 
 
-# -------------------------------------------------------------------
-# ОБРАБОТЧИКИ КНОПОК ГЛАВНОГО МЕНЮ
-# -------------------------------------------------------------------
 @dp.message(F.text == "ℹ️ О боте")
 async def about_bot(message: types.Message, state: FSMContext):
     await state.clear()
@@ -194,22 +232,23 @@ async def main():
     await init_db()
     logger.info("База данных инициализирована")
     logger.info("=" * 55)
-    logger.info("        🤖 AI-ПСИХОЛОГ v3.0.0")
+    logger.info("        🤖 AI-ПСИХОЛОГ v3.1.0")
     logger.info("=" * 55)
     logger.info("📡 СТАТУС СИСТЕМЫ:")
     logger.info("  ✅ Бот успешно запущен")
     logger.info("  ✅ DeepSeek API подключен")
     logger.info("  ✅ База данных SQLite (aiosqlite) инициализирована")
     logger.info("🎯 АКТИВНЫЕ ФУНКЦИИ:")
-    logger.info("  💬 Диалог с ИИ-психологом (20 сообщений/день)")
-    logger.info("  👤 Личный кабинет (статистика, история)")
+    logger.info("  💬 Диалог с ИИ-психологом (баланс сообщений)")
+    logger.info("  👤 Личный кабинет (статистика, история, рефералы)")
+    logger.info("  🎁 Реферальная система (+100 сообщений за друга)")
     logger.info("  🧠 Контекст и суммаризация")
     logger.info("  🆘 Кризис-детектор")
     logger.info("  ℹ️  Информация о боте")
     logger.info("  🔧 Админ-панель (управление пользователями, рассылка)")
     logger.info("🚧 В РАЗРАБОТКЕ:")
     logger.info("  📋 Тест на депрессию (шкала Бека)")
-    logger.info("  🎁 Приглашение друга и покупки")
+    logger.info("  🛒 Покупка сообщений")
     logger.info("=" * 55)
     logger.info("⏳ Ожидание входящих сообщений...")
     await dp.start_polling(bot)

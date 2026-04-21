@@ -1,7 +1,6 @@
 # database.py
 # Асинхронный модуль для работы с SQLite (aiosqlite).
-# Хранит историю диалогов, тест Бека, баланс сообщений (новая модель), суммаризации, профили.
-# Проведена миграция: daily_count → balance, удалён reset_date.
+# Хранит историю диалогов, тест Бека, баланс сообщений, суммаризации, профили, рефералы.
 
 import aiosqlite
 from datetime import datetime, date
@@ -56,13 +55,8 @@ async def init_db() -> None:
         column_names = [col[1] for col in columns]
 
         if 'daily_count' in column_names:
-            # Переименовываем daily_count в balance
             await conn.execute("ALTER TABLE message_limits RENAME COLUMN daily_count TO balance")
             print("[MIGRATION] Столбец 'daily_count' переименован в 'balance'")
-
-        # Если остался столбец reset_date – он больше не используется, но удалить его в SQLite сложно,
-        # поэтому просто игнорируем. При желании можно пересоздать таблицу, но это рискованно.
-        # В новых версиях таблица создаётся без reset_date.
 
         # Таблица суммаризаций
         await conn.execute("""
@@ -77,7 +71,7 @@ async def init_db() -> None:
         """)
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_summaries_user_id ON summaries(user_id)")
 
-        # Таблица профилей пользователей (создаём с полями в правильном порядке)
+        # Таблица профилей пользователей
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -88,7 +82,7 @@ async def init_db() -> None:
             )
         """)
 
-        # МИГРАЦИЯ: добавляем столбец username, если он отсутствует (для старых БД)
+        # МИГРАЦИЯ: добавляем столбец username, если он отсутствует
         cursor = await conn.execute("PRAGMA table_info(users)")
         columns = await cursor.fetchall()
         column_names = [col[1] for col in columns]
@@ -96,6 +90,18 @@ async def init_db() -> None:
         if 'username' not in column_names:
             await conn.execute("ALTER TABLE users ADD COLUMN username TEXT")
             print("[MIGRATION] Столбец 'username' добавлен в таблицу 'users'")
+
+        # НОВАЯ ТАБЛИЦА: реферальная система
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS referrals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                inviter_id INTEGER,
+                invited_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                bonus_given BOOLEAN DEFAULT 0,
+                UNIQUE(invited_id)
+            )
+        """)
 
         await conn.commit()
 
@@ -206,14 +212,12 @@ async def try_decrement_balance(user_id: int) -> Tuple[bool, int]:
             )
             row = await cursor.fetchone()
             if not row:
-                # Пользователь ещё не имеет записи – баланс 0
                 await conn.commit()
                 return False, 0
             balance = row[0]
             if balance <= 0:
                 await conn.commit()
                 return False, balance
-            # Уменьшаем на 1
             await conn.execute(
                 "UPDATE message_limits SET balance = balance - 1 WHERE user_id = ?",
                 (user_id,)
@@ -241,17 +245,6 @@ async def add_balance(user_id: int, amount: int) -> int:
         """, (user_id, amount, amount))
         await conn.commit()
         return await get_balance(user_id)
-
-
-async def reset_balance_to_20(user_id: int) -> None:
-    """Устанавливает баланс пользователя равным 20 (для админ-панели)."""
-    async with aiosqlite.connect(DB_NAME) as conn:
-        await conn.execute("""
-            INSERT INTO message_limits (user_id, balance)
-            VALUES (?, 20)
-            ON CONFLICT(user_id) DO UPDATE SET balance = 20
-        """, (user_id,))
-        await conn.commit()
 
 
 # -------------------------------------------------------------------
@@ -477,10 +470,72 @@ async def search_users(query: str) -> List[Dict]:
                         "user_id": row[0],
                         "telegram_name": row[1],
                         "custom_name": row[2],
-                        "username": row[4]   # username теперь на позиции 4
+                        "username": row[4]
                     }
                     for row in rows
                 ]
         except ValueError:
             return []
     return []
+
+
+# -------------------------------------------------------------------
+# НОВЫЕ ФУНКЦИИ: РЕФЕРАЛЬНАЯ СИСТЕМА
+# -------------------------------------------------------------------
+async def add_referral(inviter_id: int, invited_id: int) -> bool:
+    """
+    Сохраняет связь пригласитель–приглашённый, если приглашённый ещё не был зарегистрирован.
+    Возвращает True, если запись добавлена (новый реферал).
+    """
+    async with aiosqlite.connect(DB_NAME) as conn:
+        try:
+            await conn.execute("""
+                INSERT INTO referrals (inviter_id, invited_id)
+                VALUES (?, ?)
+            """, (inviter_id, invited_id))
+            await conn.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            return False
+
+
+async def get_referral_count(inviter_id: int) -> int:
+    """Возвращает количество приглашённых пользователей."""
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute("""
+            SELECT COUNT(*) FROM referrals WHERE inviter_id = ?
+        """, (inviter_id,))
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+
+async def has_pending_referral_bonus(invited_id: int) -> bool:
+    """
+    Проверяет, есть ли для приглашённого пользователя невыплаченный бонус.
+    """
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute("""
+            SELECT inviter_id FROM referrals
+            WHERE invited_id = ? AND bonus_given = 0
+        """, (invited_id,))
+        row = await cursor.fetchone()
+        return row is not None
+
+
+async def mark_referral_bonus_given(invited_id: int) -> None:
+    """Отмечает, что бонус пригласившему начислен."""
+    async with aiosqlite.connect(DB_NAME) as conn:
+        await conn.execute("""
+            UPDATE referrals SET bonus_given = 1 WHERE invited_id = ?
+        """, (invited_id,))
+        await conn.commit()
+
+
+async def get_inviter_id(invited_id: int) -> int | None:
+    """Возвращает ID пригласившего для данного приглашённого."""
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute("""
+            SELECT inviter_id FROM referrals WHERE invited_id = ?
+        """, (invited_id,))
+        row = await cursor.fetchone()
+        return row[0] if row else None
