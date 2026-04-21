@@ -1,6 +1,6 @@
 # handlers/profile_handlers.py
-# Личный кабинет пользователя: статистика, история тестов, остаток сообщений, информация о подписке.
-# Все данные берутся из базы данных через функции get_user_info и get_user_bdi_results.
+# Личный кабинет пользователя: остаток сообщений, история тестов, приглашение друга, покупки.
+# Кнопка "Покупки" заменена на "Купить".
 
 import logging
 from aiogram import Router, types, F
@@ -15,18 +15,32 @@ router = Router()
 
 def get_profile_keyboard() -> InlineKeyboardMarkup:
     """
-    Инлайн-клавиатура для навигации внутри личного кабинета.
+    Инлайн-клавиатура для главного экрана личного кабинета.
     Кнопки:
-      - Моя статистика
       - История тестов
-      - Подписка
+      - Пригласить друга
+      - Купить
       - Главное меню (возврат)
     """
     buttons = [
-        [InlineKeyboardButton(text="📊 Моя статистика", callback_data="profile_stats")],
         [InlineKeyboardButton(text="📜 История тестов", callback_data="profile_tests")],
-        [InlineKeyboardButton(text="💎 Подписка", callback_data="profile_subscription")],
+        [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="profile_invite")],
+        [InlineKeyboardButton(text="🛒 Купить", callback_data="profile_purchases")],
         [InlineKeyboardButton(text="🔙 Главное меню", callback_data="profile_back_to_main")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_tests_keyboard() -> InlineKeyboardMarkup:
+    """
+    Инлайн-клавиатура для раздела истории тестов.
+    Кнопки:
+      - Пройти тест (заглушка)
+      - Назад (в личный кабинет)
+    """
+    buttons = [
+        [InlineKeyboardButton(text="📋 Пройти тест", callback_data="profile_start_test")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="profile_back_from_tests")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -83,35 +97,11 @@ async def profile_main(message: types.Message, state: FSMContext):
 # -------------------------------------------------------------------
 # ОБРАБОТЧИКИ ИНЛАЙН-КНОПОК ЛИЧНОГО КАБИНЕТА
 # -------------------------------------------------------------------
-@router.callback_query(F.data == "profile_stats")
-async def profile_stats(callback: types.CallbackQuery):
-    """Показывает подробную статистику пользователя."""
-    user_id = callback.from_user.id
-    info = await get_user_info(user_id)
-
-    if not info:
-        await callback.answer("Профиль не найден.", show_alert=True)
-        return
-
-    # Здесь можно добавить расчёт дней с регистрации, средней активности и т.д.
-    text = (
-        "📊 **Ваша статистика**\n\n"
-        f"📅 Дней с регистрации: (скоро)\n"
-        f"💬 Всего сообщений: {info['total_messages']}\n"
-        f"📈 Средняя активность: (скоро)\n\n"
-        f"Сегодня: {info['messages_today']}/{info['limit']}\n"
-        f"Осталось бесплатных: {info['remaining']}"
-    )
-    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=get_profile_keyboard())
-    await callback.answer()
-
-
 @router.callback_query(F.data == "profile_tests")
 async def profile_tests(callback: types.CallbackQuery):
     """Показывает историю пройденных тестов Бека."""
     user_id = callback.from_user.id
 
-    # Пытаемся получить реальные данные; если функция не реализована – пустой список
     try:
         results = await get_user_bdi_results(user_id, limit=5)
     except Exception as e:
@@ -129,27 +119,68 @@ async def profile_tests(callback: types.CallbackQuery):
             lines.append(f"{date_str}: {score} баллов – {interpretation}")
         text = "\n".join(lines)
 
-    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=get_profile_keyboard())
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=get_tests_keyboard())
     await callback.answer()
 
 
-@router.callback_query(F.data == "profile_subscription")
-async def profile_subscription(callback: types.CallbackQuery):
-    """Информация о подписке (заглушка на будущее)."""
+@router.callback_query(F.data == "profile_start_test")
+async def profile_start_test(callback: types.CallbackQuery):
+    """Заглушка для запуска теста Бека."""
+    await callback.answer("📋 Функция прохождения теста появится в ближайшее время.", show_alert=True)
+
+
+@router.callback_query(F.data == "profile_back_from_tests")
+async def profile_back_from_tests(callback: types.CallbackQuery):
+    """
+    Возвращает из истории тестов обратно в главное меню личного кабинета.
+    """
+    user_id = callback.from_user.id
+    info = await get_user_info(user_id)
+
+    if not info:
+        await callback.answer("Профиль не найден.", show_alert=True)
+        return
+
+    try:
+        test_results = await get_user_bdi_results(user_id, limit=1)
+    except Exception:
+        test_results = []
+
+    if test_results:
+        last_test = test_results[0]
+        test_line = f"📋 Тест Бека: {last_test['score']} баллов ({last_test['interpretation']})"
+    else:
+        test_line = "📋 Тест Бека: не пройден"
+
     text = (
-        "💎 **Подписка**\n\n"
-        "Premium-подписка снимает все лимиты и даёт дополнительные возможности.\n"
-        "Оформить можно будет в ближайшее время."
+        "👤 **Личный кабинет**\n\n"
+        f"{test_line}\n"
+        f"📅 Всего сессий: (в разработке)\n"
+        f"💬 Сообщений: {info['messages_today']}/{info['limit']} (осталось {info['remaining']})\n\n"
+        "Выберите действие:"
     )
+
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=get_profile_keyboard())
     await callback.answer()
+
+
+@router.callback_query(F.data == "profile_invite")
+async def profile_invite(callback: types.CallbackQuery):
+    """Заглушка для приглашения друга."""
+    await callback.answer("🎁 Функция приглашения друга появится позже.", show_alert=True)
+
+
+@router.callback_query(F.data == "profile_purchases")
+async def profile_purchases(callback: types.CallbackQuery):
+    """Заглушка для раздела покупок (теперь называется "Купить")."""
+    await callback.answer("🛒 Возможность покупки появится в будущем.", show_alert=True)
 
 
 @router.callback_query(F.data == "profile_back_to_main")
 async def profile_back_to_main(callback: types.CallbackQuery):
     """
-    Возвращает пользователя в главное меню.
-    Удаляет сообщение личного кабинета и отправляет Reply-клавиатуру главного меню.
+    Возвращает пользователя в главное меню (Reply-клавиатура).
+    Удаляет сообщение личного кабинета и отправляет клавиатуру главного меню.
     """
     await callback.message.delete()
     await callback.message.answer(
