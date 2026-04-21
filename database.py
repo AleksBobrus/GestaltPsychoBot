@@ -137,6 +137,20 @@ async def save_bdi_result(user_id: int, score: int, interpretation: str) -> None
         await conn.commit()
 
 
+async def get_user_bdi_results(user_id: int, limit: int = 10) -> List[Dict]:
+    """Возвращает последние результаты теста Бека."""
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute("""
+            SELECT date, score, interpretation FROM bdi_results
+            WHERE user_id = ?
+            ORDER BY date DESC LIMIT ?
+        """, (user_id, limit))
+        rows = await cursor.fetchall()
+        return [
+            {"date": row[0], "score": row[1], "interpretation": row[2]}
+            for row in rows
+        ]
+
 # -------------------------------------------------------------------
 # ЛИМИТЫ СООБЩЕНИЙ
 # -------------------------------------------------------------------

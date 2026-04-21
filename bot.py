@@ -13,6 +13,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import ReplyKeyboardRemove
 from keyboards import get_main_menu
 from handlers.dialog_handlers import register_dialog_handlers
+from handlers.profile_handlers import router as profile_router
 from handlers.admin import router as admin_router
 from database import init_db, save_user_profile
 
@@ -180,16 +181,11 @@ async def placeholder_test(message: types.Message, state: FSMContext):
                          reply_markup=get_main_menu(message.from_user.id))
 
 
-@dp.message(F.text == "👤 Личный кабинет")
-async def placeholder_profile(message: types.Message, state: FSMContext):
-    await state.clear()
-    await message.answer("🛠 Личный кабинет в разработке.", reply_markup=get_main_menu(message.from_user.id))
-
-
 # -------------------------------------------------------------------
 # ПОДКЛЮЧЕНИЕ МОДУЛЕЙ
 # -------------------------------------------------------------------
 register_dialog_handlers(dp)
+dp.include_router(profile_router)
 dp.include_router(admin_router)
 
 
