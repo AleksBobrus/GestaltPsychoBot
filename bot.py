@@ -21,6 +21,7 @@ from database import (
     init_db, save_user_profile, add_balance, get_balance,
     add_referral, has_pending_referral_bonus, mark_referral_bonus_given, get_inviter_id
 )
+from database import get_total_users_count
 
 # -------------------------------------------------------------------
 # НАСТРОЙКА ЛОГИРОВАНИЯ
@@ -171,6 +172,34 @@ async def process_name(message: types.Message, state: FSMContext):
             # Обычная регистрация – 20 сообщений
             await add_balance(user_id, 20)
             print(f"[BALANCE] 20 стартовых сообщений начислено пользователю {user_id}")
+
+    # --- УВЕДОМЛЕНИЕ АДМИНИСТРАТОРАМ О ЮБИЛЕЙНЫХ РЕГИСТРАЦИЯХ ---
+    total_users = await get_total_users_count()
+    # Условия для юбилейных номеров: 1-5, 10, 20, 30, 40...
+    notify = False
+    if 1 <= total_users <= 5:
+        notify = True
+    elif total_users >= 10 and total_users % 10 == 0:
+        notify = True
+
+    if notify:
+        admin_ids_str = os.getenv("ADMIN_IDS", "")
+        if admin_ids_str:
+            admin_ids = [int(uid.strip()) for uid in admin_ids_str.split(",") if uid.strip()]
+            # Формируем сообщение
+            user_mention = f"@{username}" if username else user_name
+            message_text = (
+                f"🎉 Новый пользователь!\n"
+                f"Порядковый номер: {total_users}\n"
+                f"ID: {user_id}\n"
+                f"Имя: {user_name}\n"
+                f"Username: {user_mention}"
+            )
+            for admin_id in admin_ids:
+                try:
+                    await bot.send_message(admin_id, message_text)
+                except Exception as e:
+                    logger.warning(f"Не удалось отправить уведомление админу {admin_id}: {e}")
 
     # --- ПРОВЕРКА РЕФЕРАЛЬНОГО БОНУСА ДЛЯ ПРИГЛАСИВШЕГО ---
     # Если текущий пользователь был приглашён и бонус ещё не выплачен
