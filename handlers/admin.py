@@ -350,7 +350,7 @@ async def user_add_balance_ask_callback(callback: types.CallbackQuery):
 
 @router.callback_query(F.data.startswith("user_add_balance_confirm:"))
 async def user_add_balance_confirm_callback(callback: types.CallbackQuery):
-    """Добавляет 20 сообщений на баланс и возвращает информацию о пользователе."""
+    """Добавляет 20 сообщений на баланс и уведомляет пользователя."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -359,7 +359,13 @@ async def user_add_balance_confirm_callback(callback: types.CallbackQuery):
     await add_balance(user_id, 20)
     await callback.answer("✅ 20 сообщений добавлено", show_alert=True)
 
-    # Обновляем информацию о пользователе
+    # Отправляем уведомление пользователю
+    try:
+        await callback.bot.send_message(user_id, "💰 Ваш баланс пополнен на +20 сообщений!")
+    except Exception as e:
+        logger.warning(f"Не удалось отправить уведомление пользователю {user_id}: {e}")
+
+    # Обновляем информацию о пользователе в админ-панели
     await user_info_callback(callback)
 
 
