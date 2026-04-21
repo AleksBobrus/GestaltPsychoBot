@@ -75,7 +75,6 @@ def get_help_text() -> str:
         "• 🧠 **Контекст диалога** — запоминание предыдущих бесед\n"
         "• 🆘 **Кризис-детектор** — распознавание тревожных фраз и предложение помощи\n\n"
         "🚧 **В планах:**\n"
-        "• 🌱 Техники заземления\n"
         "• 📋 Тест на уровень депрессии (шкала Бека)\n"
         "• 👤 Личный кабинет со статистикой\n\n"
         "⚠️ **Важно:** бот не заменяет профессионального психолога. "
@@ -166,12 +165,6 @@ async def cmd_help(message: types.Message, state: FSMContext):
 async def about_bot(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer(get_help_text(), parse_mode="Markdown", reply_markup=get_main_menu(message.from_user.id))
-
-
-@dp.message(F.text == "🌱 Заземлиться")
-async def placeholder_grounding(message: types.Message, state: FSMContext):
-    await state.clear()
-    await message.answer("🛠 Техники заземления появятся позже.", reply_markup=get_main_menu(message.from_user.id))
 
 
 @dp.message(F.text == "📋 Пройти тест")
