@@ -1,6 +1,6 @@
 # bot.py
 # Главный файл запуска Telegram-бота «AI-психолог».
-# Добавлен запрос имени пользователя при первом запуске.
+# Добавлен запрос имени пользователя при первом запуске и сохранение username.
 
 import asyncio
 import os
@@ -102,22 +102,28 @@ async def cmd_start(message: types.Message, state: FSMContext):
 # -------------------------------------------------------------------
 @dp.message(NameState.waiting_for_name)
 async def process_name(message: types.Message, state: FSMContext):
-    """Сохраняет имя пользователя в БД и показывает главное меню."""
+    """
+    Сохраняет имя пользователя (включая username) в БД и показывает главное меню.
+    """
     user_name = message.text.strip()
 
     if len(user_name) > 50:
         await message.answer("⚠️ Имя слишком длинное. Пожалуйста, введите покороче.")
         return
 
-    # Сохраняем в FSM
+    # Сохраняем имя в FSM (может пригодиться в других обработчиках)
     await state.update_data(user_name=user_name)
 
-    # Сохраняем в БД для админ-панели
+    # Получаем данные из Telegram
     telegram_name = message.from_user.full_name or message.from_user.first_name or "Без имени"
+    username = message.from_user.username   # Может быть None, если пользователь не установил @username
+
+    # Сохраняем профиль в БД (добавлен username)
     await save_user_profile(
         user_id=message.from_user.id,
         telegram_name=telegram_name,
-        custom_name=user_name
+        custom_name=user_name,
+        username=username
     )
 
     await state.clear()

@@ -416,3 +416,40 @@ async def get_total_users_count() -> int:
         cursor = await conn.execute("SELECT COUNT(*) FROM users")
         row = await cursor.fetchone()
         return row[0] if row else 0
+
+
+async def search_users(query: str) -> List[Dict]:
+    """
+    Ищет пользователей по ID или по имени (telegram_name / custom_name).
+    Возвращает список словарей с полями user_id, telegram_name, custom_name.
+    """
+    async with aiosqlite.connect(DB_NAME) as conn:
+        # Пробуем интерпретировать запрос как число (ID)
+        try:
+            user_id = int(query)
+            cursor = await conn.execute("""
+                SELECT user_id, telegram_name, custom_name FROM users
+                WHERE user_id = ?
+            """, (user_id,))
+            rows = await cursor.fetchall()
+            if rows:
+                return [
+                    {"user_id": row[0], "telegram_name": row[1], "custom_name": row[2]}
+                    for row in rows
+                ]
+        except ValueError:
+            pass  # не число, ищем по имени
+
+        # Ищем по части имени (telegram_name или custom_name)
+        like_query = f"%{query}%"
+        cursor = await conn.execute("""
+            SELECT user_id, telegram_name, custom_name FROM users
+            WHERE telegram_name LIKE ? OR custom_name LIKE ?
+            ORDER BY created_at DESC
+            LIMIT 20
+        """, (like_query, like_query))
+        rows = await cursor.fetchall()
+        return [
+            {"user_id": row[0], "telegram_name": row[1], "custom_name": row[2]}
+            for row in rows
+        ]
