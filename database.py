@@ -1,6 +1,7 @@
 # database.py
 # Асинхронный модуль для работы с SQLite (aiosqlite).
-# Хранит историю диалогов, тест Бека, баланс сообщений, суммаризации, профили, рефералы, сессии.
+# Хранит историю диалогов, тест Бека, баланс сообщений, суммаризации, профили,
+# рефералы, сессии и глобальный счётчик сообщений ИИ.
 
 import aiosqlite
 from datetime import datetime, date
@@ -9,11 +10,12 @@ from typing import List, Dict, Tuple
 DB_NAME = "dialog_history.db"
 
 # -------------------------------------------------------------------
-# ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ (АСИНХРОННАЯ) С МИГРАЦИЕЙ
+# ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ (АСИНХРОННАЯ) С МИГРАЦИЯМИ
 # -------------------------------------------------------------------
 async def init_db() -> None:
     """
-    Создаёт таблицы, если их нет, и выполняет миграцию для перехода на баланс.
+    Создаёт все необходимые таблицы, если их нет, и выполняет миграции
+    (добавление столбцов, переименование) для обновления старых баз.
     Вызывается один раз при старте бота.
     """
     async with aiosqlite.connect(DB_NAME) as conn:
@@ -41,7 +43,7 @@ async def init_db() -> None:
         """)
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_bdi_user_id ON bdi_results(user_id)")
 
-        # Таблица баланса сообщений (ранее message_limits)
+        # Таблица баланса сообщений (ранее называлась message_limits)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS message_limits (
                 user_id INTEGER PRIMARY KEY,
@@ -53,7 +55,6 @@ async def init_db() -> None:
         cursor = await conn.execute("PRAGMA table_info(message_limits)")
         columns = await cursor.fetchall()
         column_names = [col[1] for col in columns]
-
         if 'daily_count' in column_names:
             await conn.execute("ALTER TABLE message_limits RENAME COLUMN daily_count TO balance")
             print("[MIGRATION] Столбец 'daily_count' переименован в 'balance'")
@@ -86,7 +87,6 @@ async def init_db() -> None:
         cursor = await conn.execute("PRAGMA table_info(users)")
         columns = await cursor.fetchall()
         column_names = [col[1] for col in columns]
-
         if 'username' not in column_names:
             await conn.execute("ALTER TABLE users ADD COLUMN username TEXT")
             print("[MIGRATION] Столбец 'username' добавлен в таблицу 'users'")
@@ -103,7 +103,7 @@ async def init_db() -> None:
             )
         """)
 
-        # НОВАЯ ТАБЛИЦА: сессии (подсчёт количества диалогов)
+        # Таблица сессий (подсчёт количества диалогов)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,14 +114,22 @@ async def init_db() -> None:
             )
         """)
 
+        # Таблица глобального счётчика сообщений ИИ (для лимита 500)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS global_stats (
+                key TEXT PRIMARY KEY,
+                value INTEGER
+            )
+        """)
+
         await conn.commit()
 
 
 # -------------------------------------------------------------------
-# ИСТОРИЯ ДИАЛОГОВ (без изменений)
+# ИСТОРИЯ ДИАЛОГОВ
 # -------------------------------------------------------------------
 async def save_message(user_id: int, role: str, content: str) -> None:
-    """Асинхронно сохраняет одно сообщение."""
+    """Асинхронно сохраняет одно сообщение (от пользователя или ассистента)."""
     async with aiosqlite.connect(DB_NAME) as conn:
         await conn.execute("""
             INSERT INTO chat_history (user_id, role, content, timestamp)
@@ -154,7 +162,7 @@ async def clear_user_history(user_id: int) -> None:
 
 
 # -------------------------------------------------------------------
-# ТЕСТ БЕКА (без изменений)
+# ТЕСТ БЕКА
 # -------------------------------------------------------------------
 async def save_bdi_result(user_id: int, score: int, interpretation: str) -> None:
     """Сохраняет результат теста Бека."""
@@ -182,7 +190,7 @@ async def get_user_bdi_results(user_id: int, limit: int = 10) -> List[Dict]:
 
 
 # -------------------------------------------------------------------
-# БАЛАНС СООБЩЕНИЙ (НОВАЯ МОДЕЛЬ)
+# БАЛАНС СООБЩЕНИЙ
 # -------------------------------------------------------------------
 async def get_balance(user_id: int) -> int:
     """Возвращает текущий баланс сообщений пользователя."""
@@ -259,7 +267,7 @@ async def add_balance(user_id: int, amount: int) -> int:
 
 
 # -------------------------------------------------------------------
-# СУММАРИЗАЦИЯ (без изменений)
+# СУММАРИЗАЦИЯ
 # -------------------------------------------------------------------
 async def save_summary(user_id: int, start_msg_id: int, end_msg_id: int, summary_text: str) -> None:
     """Сохраняет суммаризацию диалога."""
@@ -361,7 +369,7 @@ async def get_all_user_ids() -> List[int]:
 
 
 # -------------------------------------------------------------------
-# ПРОФИЛИ ПОЛЬЗОВАТЕЛЕЙ (ДЛЯ АДМИН-ПАНЕЛИ)
+# ПРОФИЛИ ПОЛЬЗОВАТЕЛЕЙ
 # -------------------------------------------------------------------
 async def save_user_profile(user_id: int, telegram_name: str, custom_name: str | None, username: str | None) -> None:
     """
@@ -615,5 +623,35 @@ async def get_total_sessions(user_id: int) -> int:
             SELECT COUNT(*) FROM sessions
             WHERE user_id = ? AND ended_at IS NOT NULL
         """, (user_id,))
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+
+# -------------------------------------------------------------------
+# ГЛОБАЛЬНЫЙ СЧЁТЧИК СООБЩЕНИЙ ИИ (ДЛЯ ЛИМИТА 500)
+# -------------------------------------------------------------------
+async def increment_global_message_count() -> int:
+    """
+    Увеличивает глобальный счётчик сообщений ИИ на 1 и возвращает новое значение.
+    Если запись 'total_ai_messages' отсутствует, она создаётся со значением 1.
+    """
+    async with aiosqlite.connect(DB_NAME) as conn:
+        await conn.execute("""
+            INSERT INTO global_stats (key, value) VALUES ('total_ai_messages', 1)
+            ON CONFLICT(key) DO UPDATE SET value = value + 1
+        """)
+        await conn.commit()
+        cursor = await conn.execute("SELECT value FROM global_stats WHERE key = 'total_ai_messages'")
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+
+async def get_global_message_count() -> int:
+    """
+    Возвращает текущее значение глобального счётчика сообщений ИИ.
+    Если записи нет, возвращает 0.
+    """
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute("SELECT value FROM global_stats WHERE key = 'total_ai_messages'")
         row = await cursor.fetchone()
         return row[0] if row else 0

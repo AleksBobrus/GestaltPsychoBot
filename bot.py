@@ -1,8 +1,8 @@
 # bot.py
 # Главный файл запуска Telegram-бота «AI-психолог».
-# Реализована реферальная система с бонусами:
-#   - Без реферала: +20 сообщений при регистрации.
-#   - По реферальной ссылке: приглашённый получает +100, пригласивший +100.
+# Добавлен запрос имени пользователя при первом запуске и сохранение username.
+# Реализована реферальная система с бонусами.
+# Настроено логирование в консоль и в файл bot_public.log.
 
 import asyncio
 import os
@@ -19,18 +19,36 @@ from handlers.profile_handlers import router as profile_router
 from handlers.admin import router as admin_router
 from database import (
     init_db, save_user_profile, add_balance, get_balance,
-    add_referral, has_pending_referral_bonus, mark_referral_bonus_given, get_inviter_id
+    add_referral, has_pending_referral_bonus, mark_referral_bonus_given, get_inviter_id,
+    get_total_users_count   # для уведомлений о юбилейных регистрациях
 )
-from database import get_total_users_count
 
 # -------------------------------------------------------------------
-# НАСТРОЙКА ЛОГИРОВАНИЯ
+# НАСТРОЙКА ЛОГИРОВАНИЯ (КОНСОЛЬ + ФАЙЛ)
 # -------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+# Создаём корневой логгер
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# Форматтер для единообразного вывода
+formatter = logging.Formatter(
+    "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
+
+# Обработчик для вывода в консоль
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
+# Обработчик для записи в файл (для публичного мониторинга)
+file_handler = logging.FileHandler("bot_public.log", encoding="utf-8")
+file_handler.setLevel(logging.INFO)
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
+# Получаем логгер для этого модуля (будет наследовать настройки корневого)
 logger = logging.getLogger(__name__)
 
 # -------------------------------------------------------------------
@@ -53,6 +71,7 @@ dp = Dispatcher()
 # -------------------------------------------------------------------
 @dp.errors()
 async def errors_handler(_: types.Update, exception: Exception):
+    """Ловит все необработанные исключения и логирует их."""
     logger.exception("Критическая ошибка при обработке обновления", exc_info=exception)
     return True
 
@@ -68,10 +87,10 @@ class NameState(StatesGroup):
 # ЕДИНАЯ ФУНКЦИЯ СПРАВКИ
 # -------------------------------------------------------------------
 def get_help_text() -> str:
-    """Возвращает текст с информацией о боте (версия 3.2.0)."""
+    """Возвращает текст с информацией о боте (версия 3.3.0)."""
     return (
         "🤖 **• AI-психолог •**\n"
-        "Версия: **3.2.0**\n\n"
+        "Версия: **3.3.0**\n\n"
         "AI-психолог — это виртуальный помощник для поддержки ментального благополучия. "
         "Бот использует технологии искусственного интеллекта, чтобы выслушать, "
         "помочь разобраться в чувствах и предложить полезные техники.\n\n"
@@ -85,7 +104,8 @@ def get_help_text() -> str:
         "• 📋 Тест на уровень депрессии (шкала Бека)\n"
         "• 🛒 Покупка сообщений\n\n"
         "⚠️ **Важно:** бот не заменяет профессионального психолога. "
-        "При серьёзных проблемах необходимо обратиться к специалисту."
+        "При серьёзных проблемах необходимо обратиться к специалисту.\n\n"
+        "📊 **Тестовый режим:** лимит 500 сообщений ИИ."
     )
 
 
@@ -117,7 +137,7 @@ async def cmd_start(message: types.Message, state: FSMContext, command: CommandO
             if inviter_id != user_id:
                 added = await add_referral(inviter_id, user_id)
                 if added:
-                    print(f"[REFERRAL] Пользователь {user_id} приглашён пользователем {inviter_id}")
+                    logger.info(f"Пользователь {user_id} приглашён пользователем {inviter_id}")
         except ValueError:
             pass
 
@@ -131,7 +151,7 @@ async def cmd_start(message: types.Message, state: FSMContext, command: CommandO
 
 
 # -------------------------------------------------------------------
-# ОБРАБОТЧИК ВВОДА ИМЕНИ (НАЧИСЛЕНИЕ БАЛАНСА И РЕФЕРАЛЬНЫХ БОНУСОВ)
+# ОБРАБОТЧИК ВВОДА ИМЕНИ (НАЧИСЛЕНИЕ БАЛАНСА, БОНУСОВ, УВЕДОМЛЕНИЕ АДМИНОВ)
 # -------------------------------------------------------------------
 @dp.message(NameState.waiting_for_name)
 async def process_name(message: types.Message, state: FSMContext):
@@ -144,6 +164,7 @@ async def process_name(message: types.Message, state: FSMContext):
       - Если пользователь был приглашён и бонус ещё не выплачен:
           * начисляет пригласившему 100 сообщений
           * отмечает бонус как выданный.
+      - Отправляет уведомление администраторам о юбилейных регистрациях (1-5, 10, 20...).
     """
     user_name = message.text.strip()
     if len(user_name) > 50:
@@ -162,20 +183,24 @@ async def process_name(message: types.Message, state: FSMContext):
     # --- НАЧИСЛЕНИЕ СТАРТОВОГО БАЛАНСА (только если баланс равен 0) ---
     current_balance = await get_balance(user_id)
     if current_balance == 0:
-        # Проверяем, пришёл ли пользователь по реферальной ссылке
         inviter_id = await get_inviter_id(user_id)
         if inviter_id is not None:
-            # Пользователь приглашён – даём 100 сообщений
             await add_balance(user_id, 100)
-            print(f"[BALANCE] 100 стартовых сообщений начислено пользователю {user_id} (реферал)")
+            logger.info(f"100 стартовых сообщений начислено пользователю {user_id} (реферал)")
         else:
-            # Обычная регистрация – 20 сообщений
             await add_balance(user_id, 20)
-            print(f"[BALANCE] 20 стартовых сообщений начислено пользователю {user_id}")
+            logger.info(f"20 стартовых сообщений начислено пользователю {user_id}")
+
+    # --- ПРОВЕРКА РЕФЕРАЛЬНОГО БОНУСА ДЛЯ ПРИГЛАСИВШЕГО ---
+    if await has_pending_referral_bonus(user_id):
+        inviter_id = await get_inviter_id(user_id)
+        if inviter_id:
+            await add_balance(inviter_id, 100)
+            await mark_referral_bonus_given(user_id)
+            logger.info(f"Бонус 100 сообщений начислен пользователю {inviter_id} за приглашение {user_id}")
 
     # --- УВЕДОМЛЕНИЕ АДМИНИСТРАТОРАМ О ЮБИЛЕЙНЫХ РЕГИСТРАЦИЯХ ---
     total_users = await get_total_users_count()
-    # Условия для юбилейных номеров: 1-5, 10, 20, 30, 40...
     notify = False
     if 1 <= total_users <= 5:
         notify = True
@@ -186,7 +211,6 @@ async def process_name(message: types.Message, state: FSMContext):
         admin_ids_str = os.getenv("ADMIN_IDS", "")
         if admin_ids_str:
             admin_ids = [int(uid.strip()) for uid in admin_ids_str.split(",") if uid.strip()]
-            # Формируем сообщение
             user_mention = f"@{username}" if username else user_name
             message_text = (
                 f"🎉 Новый пользователь!\n"
@@ -200,16 +224,6 @@ async def process_name(message: types.Message, state: FSMContext):
                     await bot.send_message(admin_id, message_text)
                 except Exception as e:
                     logger.warning(f"Не удалось отправить уведомление админу {admin_id}: {e}")
-
-    # --- ПРОВЕРКА РЕФЕРАЛЬНОГО БОНУСА ДЛЯ ПРИГЛАСИВШЕГО ---
-    # Если текущий пользователь был приглашён и бонус ещё не выплачен
-    if await has_pending_referral_bonus(user_id):
-        inviter_id = await get_inviter_id(user_id)
-        if inviter_id:
-            # Пригласивший получает 100 сообщений
-            await add_balance(inviter_id, 100)
-            await mark_referral_bonus_given(user_id)
-            print(f"[REFERRAL] Бонус 100 сообщений начислен пользователю {inviter_id} за приглашение {user_id}")
 
     await state.clear()
 
@@ -225,7 +239,7 @@ async def process_name(message: types.Message, state: FSMContext):
 
 
 # -------------------------------------------------------------------
-# ОСТАЛЬНЫЕ ОБРАБОТЧИКИ (БЕЗ ИЗМЕНЕНИЙ)
+# ОСТАЛЬНЫЕ ОБРАБОТЧИКИ
 # -------------------------------------------------------------------
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message, state: FSMContext):
@@ -261,12 +275,13 @@ async def main():
     await init_db()
     logger.info("База данных инициализирована")
     logger.info("=" * 55)
-    logger.info("        🤖 AI-ПСИХОЛОГ v3.2.0")
+    logger.info("        🤖 AI-ПСИХОЛОГ v3.3.0")
     logger.info("=" * 55)
     logger.info("📡 СТАТУС СИСТЕМЫ:")
     logger.info("  ✅ Бот успешно запущен")
     logger.info("  ✅ DeepSeek API подключен")
     logger.info("  ✅ База данных SQLite (aiosqlite) инициализирована")
+    logger.info("  ✅ Логирование в файл bot_public.log настроено")
     logger.info("🎯 АКТИВНЫЕ ФУНКЦИИ:")
     logger.info("  💬 Начать сессию — диалог с ИИ (расход баланса)")
     logger.info("  👤 Личный кабинет — баланс, сессии, история тестов, рефералы")
@@ -275,6 +290,7 @@ async def main():
     logger.info("  🆘 Кризис-детектор")
     logger.info("  ℹ️  Информация о боте")
     logger.info("  🔧 Админ-панель (управление пользователями, рассылка)")
+    logger.info("  ⚠️ Глобальный лимит: 500 сообщений ИИ (тестовый режим)")
     logger.info("🚧 В РАЗРАБОТКЕ:")
     logger.info("  📋 Тест на депрессию (шкала Бека)")
     logger.info("  🛒 Покупка сообщений")
