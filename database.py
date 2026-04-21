@@ -330,7 +330,7 @@ async def get_total_messages_today() -> int:
 async def get_all_user_ids() -> List[int]:
     """Возвращает список всех уникальных user_id для рассылки."""
     async with aiosqlite.connect(DB_NAME) as conn:
-        cursor = await conn.execute("SELECT DISTINCT user_id FROM chat_history")
+        cursor = await conn.execute("SELECT user_id FROM users")
         rows = await cursor.fetchall()
         return [row[0] for row in rows]
 
