@@ -118,7 +118,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
 # -------------------------------------------------------------------
 @dp.message(NameState.waiting_for_name)
 async def process_name(message: types.Message, state: FSMContext):
-    """Обновляет custom_name и показывает главное меню."""
+    """Обновляет custom_name, начисляет стартовый баланс и показывает главное меню."""
     user_name = message.text.strip()
 
     if len(user_name) > 50:
@@ -137,6 +137,11 @@ async def process_name(message: types.Message, state: FSMContext):
         username=username
     )
 
+    # Начисляем стартовые 20 сообщений (новая модель баланса)
+    from database import add_balance
+    new_balance = await add_balance(message.from_user.id, 20)
+    print(f"[DEBUG] Пользователю {message.from_user.id} начислено 20 сообщений, баланс: {new_balance}")
+
     await state.clear()
 
     await message.answer(
@@ -148,7 +153,6 @@ async def process_name(message: types.Message, state: FSMContext):
         parse_mode="Markdown",
         reply_markup=get_main_menu(message.from_user.id)
     )
-
 
 # -------------------------------------------------------------------
 # ОБРАБОТЧИК КОМАНДЫ /help

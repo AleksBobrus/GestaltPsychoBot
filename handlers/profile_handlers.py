@@ -1,13 +1,13 @@
 # handlers/profile_handlers.py
-# Личный кабинет пользователя: остаток сообщений, история тестов, приглашение друга, покупки.
-# Кнопка "Покупки" заменена на "Купить".
+# Личный кабинет пользователя: баланс сообщений, история тестов, приглашение друга, покупки.
+# Кнопка "Купить" ведёт на заглушку (в будущем – пополнение баланса).
 
 import logging
 from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from keyboards import get_main_menu
-from database import get_user_info, get_user_bdi_results
+from database import get_user_info, get_user_bdi_results, get_balance
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -82,12 +82,15 @@ async def profile_main(message: types.Message, state: FSMContext):
     else:
         test_line = "📋 Тест Бека: не пройден"
 
+    # Получаем текущий баланс
+    balance = await get_balance(user_id)
+
     # Формируем текст сообщения
     text = (
         "👤 **Личный кабинет**\n\n"
         f"{test_line}\n"
         f"📅 Всего сессий: (в разработке)\n"
-        f"💬 Сообщений: {info['messages_today']}/{info['limit']} (осталось {info['remaining']})\n\n"
+        f"💰 Баланс: {balance} сообщ.\n\n"
         "Выберите действие:"
     )
 
@@ -143,7 +146,7 @@ async def profile_back_from_tests(callback: types.CallbackQuery):
 
     try:
         test_results = await get_user_bdi_results(user_id, limit=1)
-    except Exception:
+    except Exception: # noqa
         test_results = []
 
     if test_results:
@@ -152,11 +155,13 @@ async def profile_back_from_tests(callback: types.CallbackQuery):
     else:
         test_line = "📋 Тест Бека: не пройден"
 
+    balance = await get_balance(user_id)
+
     text = (
         "👤 **Личный кабинет**\n\n"
         f"{test_line}\n"
         f"📅 Всего сессий: (в разработке)\n"
-        f"💬 Сообщений: {info['messages_today']}/{info['limit']} (осталось {info['remaining']})\n\n"
+        f"💰 Баланс: {balance} сообщ.\n\n"
         "Выберите действие:"
     )
 
@@ -173,7 +178,7 @@ async def profile_invite(callback: types.CallbackQuery):
 @router.callback_query(F.data == "profile_purchases")
 async def profile_purchases(callback: types.CallbackQuery):
     """Заглушка для раздела покупок (теперь называется "Купить")."""
-    await callback.answer("🛒 Возможность покупки появится в будущем.", show_alert=True)
+    await callback.answer("🛒 Возможность покупки сообщений появится в будущем.", show_alert=True)
 
 
 @router.callback_query(F.data == "profile_back_to_main")

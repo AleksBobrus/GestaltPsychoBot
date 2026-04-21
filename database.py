@@ -1,8 +1,7 @@
 # database.py
 # Асинхронный модуль для работы с SQLite (aiosqlite).
-# Сохраняет всю функциональность: историю диалогов, тест Бека, лимиты, суммаризации,
-# профили пользователей (с username). Добавлена миграция для столбца username.
-# ИСПРАВЛЕНО: явный порядок полей в SELECT после ALTER TABLE.
+# Хранит историю диалогов, тест Бека, баланс сообщений (новая модель), суммаризации, профили.
+# Проведена миграция: daily_count → balance, удалён reset_date.
 
 import aiosqlite
 from datetime import datetime, date
@@ -15,7 +14,7 @@ DB_NAME = "dialog_history.db"
 # -------------------------------------------------------------------
 async def init_db() -> None:
     """
-    Создаёт таблицы, если их нет, и при необходимости добавляет новые столбцы.
+    Создаёт таблицы, если их нет, и выполняет миграцию для перехода на баланс.
     Вызывается один раз при старте бота.
     """
     async with aiosqlite.connect(DB_NAME) as conn:
@@ -43,14 +42,27 @@ async def init_db() -> None:
         """)
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_bdi_user_id ON bdi_results(user_id)")
 
-        # Таблица лимитов сообщений
+        # Таблица баланса сообщений (ранее message_limits)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS message_limits (
                 user_id INTEGER PRIMARY KEY,
-                daily_count INTEGER DEFAULT 0,
-                reset_date TEXT
+                balance INTEGER DEFAULT 0
             )
         """)
+
+        # МИГРАЦИЯ: если существует столбец daily_count, переименовываем в balance
+        cursor = await conn.execute("PRAGMA table_info(message_limits)")
+        columns = await cursor.fetchall()
+        column_names = [col[1] for col in columns]
+
+        if 'daily_count' in column_names:
+            # Переименовываем daily_count в balance
+            await conn.execute("ALTER TABLE message_limits RENAME COLUMN daily_count TO balance")
+            print("[MIGRATION] Столбец 'daily_count' переименован в 'balance'")
+
+        # Если остался столбец reset_date – он больше не используется, но удалить его в SQLite сложно,
+        # поэтому просто игнорируем. При желании можно пересоздать таблицу, но это рискованно.
+        # В новых версиях таблица создаётся без reset_date.
 
         # Таблица суммаризаций
         await conn.execute("""
@@ -89,7 +101,7 @@ async def init_db() -> None:
 
 
 # -------------------------------------------------------------------
-# ИСТОРИЯ ДИАЛОГОВ
+# ИСТОРИЯ ДИАЛОГОВ (без изменений)
 # -------------------------------------------------------------------
 async def save_message(user_id: int, role: str, content: str) -> None:
     """Асинхронно сохраняет одно сообщение."""
@@ -125,7 +137,7 @@ async def clear_user_history(user_id: int) -> None:
 
 
 # -------------------------------------------------------------------
-# ТЕСТ БЕКА
+# ТЕСТ БЕКА (без изменений)
 # -------------------------------------------------------------------
 async def save_bdi_result(user_id: int, score: int, interpretation: str) -> None:
     """Сохраняет результат теста Бека."""
@@ -151,104 +163,99 @@ async def get_user_bdi_results(user_id: int, limit: int = 10) -> List[Dict]:
             for row in rows
         ]
 
+
 # -------------------------------------------------------------------
-# ЛИМИТЫ СООБЩЕНИЙ
+# БАЛАНС СООБЩЕНИЙ (НОВАЯ МОДЕЛЬ)
 # -------------------------------------------------------------------
-async def get_message_count_today(user_id: int) -> int:
-    """Возвращает количество сообщений, отправленных пользователем сегодня."""
-    today_str = date.today().isoformat()
+async def get_balance(user_id: int) -> int:
+    """Возвращает текущий баланс сообщений пользователя."""
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute(
-            "SELECT daily_count, reset_date FROM message_limits WHERE user_id = ?",
+            "SELECT balance FROM message_limits WHERE user_id = ?",
             (user_id,)
         )
         row = await cursor.fetchone()
-    if not row:
-        return 0
-    count, reset_date = row
-    return count if reset_date == today_str else 0
+        return row[0] if row else 0
 
 
-async def increment_message_count(user_id: int) -> int:
+async def decrement_balance(user_id: int) -> int:
     """
-    Увеличивает счётчик сообщений на 1.
-    Если запись отсутствует или reset_date не сегодня, сбрасывает на 1.
-    Возвращает новое значение счётчика.
+    Уменьшает баланс пользователя на 1, если он > 0.
+    Возвращает новый баланс.
     """
-    today_str = date.today().isoformat()
     async with aiosqlite.connect(DB_NAME) as conn:
         await conn.execute("""
-            INSERT INTO message_limits (user_id, daily_count, reset_date)
-            VALUES (?, 1, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
-                daily_count = CASE
-                    WHEN reset_date = ? THEN daily_count + 1
-                    ELSE 1
-                END,
-                reset_date = ?
-        """, (user_id, today_str, today_str, today_str))
+            UPDATE message_limits SET balance = balance - 1
+            WHERE user_id = ? AND balance > 0
+        """, (user_id,))
         await conn.commit()
-
-        cursor = await conn.execute(
-            "SELECT daily_count FROM message_limits WHERE user_id = ?",
-            (user_id,)
-        )
-        row = await cursor.fetchone()
-        return row[0] if row else 1
+        return await get_balance(user_id)
 
 
-async def can_send_message(user_id: int, limit: int = 20) -> bool:
-    """Проверяет, не превышен ли дневной лимит."""
-    count = await get_message_count_today(user_id)
-    return count < limit
-
-
-async def try_increment_and_check_limit(user_id: int, limit: int = 20) -> Tuple[bool, int]:
+async def try_decrement_balance(user_id: int) -> Tuple[bool, int]:
     """
-    Атомарно проверяет, не превышен ли лимит, и увеличивает счётчик.
-    Возвращает:
-        (True, new_count) – если сообщение разрешено,
-        (False, current_count) – если лимит уже исчерпан.
+    Проверяет, что баланс > 0, и если да – уменьшает на 1 атомарно.
+    Возвращает (True, new_balance) или (False, current_balance).
     """
-    today_str = date.today().isoformat()
     async with aiosqlite.connect(DB_NAME) as conn:
         await conn.execute("BEGIN IMMEDIATE")
         try:
             cursor = await conn.execute(
-                "SELECT daily_count, reset_date FROM message_limits WHERE user_id = ?",
+                "SELECT balance FROM message_limits WHERE user_id = ?",
                 (user_id,)
             )
             row = await cursor.fetchone()
-
-            if row:
-                count, reset_date = row
-                if reset_date == today_str:
-                    if count >= limit:
-                        await conn.commit()
-                        return False, count
-                    new_count = count + 1
-                else:
-                    new_count = 1
-                await conn.execute(
-                    "UPDATE message_limits SET daily_count = ?, reset_date = ? WHERE user_id = ?",
-                    (new_count, today_str, user_id)
-                )
-            else:
-                new_count = 1
-                await conn.execute(
-                    "INSERT INTO message_limits (user_id, daily_count, reset_date) VALUES (?, ?, ?)",
-                    (user_id, new_count, today_str)
-                )
-
+            if not row:
+                # Пользователь ещё не имеет записи – баланс 0
+                await conn.commit()
+                return False, 0
+            balance = row[0]
+            if balance <= 0:
+                await conn.commit()
+                return False, balance
+            # Уменьшаем на 1
+            await conn.execute(
+                "UPDATE message_limits SET balance = balance - 1 WHERE user_id = ?",
+                (user_id,)
+            )
             await conn.commit()
-            return True, new_count
+            return True, balance - 1
         except Exception:
             await conn.rollback()
             raise
 
 
+async def has_balance(user_id: int) -> bool:
+    """Проверяет, есть ли у пользователя сообщения на балансе (>0)."""
+    balance = await get_balance(user_id)
+    return balance > 0
+
+
+async def add_balance(user_id: int, amount: int) -> int:
+    """Добавляет указанное количество сообщений на баланс пользователя."""
+    async with aiosqlite.connect(DB_NAME) as conn:
+        await conn.execute("""
+            INSERT INTO message_limits (user_id, balance)
+            VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET balance = balance + ?
+        """, (user_id, amount, amount))
+        await conn.commit()
+        return await get_balance(user_id)
+
+
+async def reset_balance_to_20(user_id: int) -> None:
+    """Устанавливает баланс пользователя равным 20 (для админ-панели)."""
+    async with aiosqlite.connect(DB_NAME) as conn:
+        await conn.execute("""
+            INSERT INTO message_limits (user_id, balance)
+            VALUES (?, 20)
+            ON CONFLICT(user_id) DO UPDATE SET balance = 20
+        """, (user_id,))
+        await conn.commit()
+
+
 # -------------------------------------------------------------------
-# СУММАРИЗАЦИЯ
+# СУММАРИЗАЦИЯ (без изменений)
 # -------------------------------------------------------------------
 async def save_summary(user_id: int, start_msg_id: int, end_msg_id: int, summary_text: str) -> None:
     """Сохраняет суммаризацию диалога."""
@@ -342,7 +349,7 @@ async def get_total_messages_today() -> int:
 
 
 async def get_all_user_ids() -> List[int]:
-    """Возвращает список всех уникальных user_id для рассылки."""
+    """Возвращает список всех уникальных user_id для рассылки (из таблицы users)."""
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("SELECT user_id FROM users")
         rows = await cursor.fetchall()
@@ -416,7 +423,8 @@ async def get_user_info(user_id: int) -> dict:
     """
     Возвращает подробную информацию о пользователе:
     - telegram_name, username, created_at (из таблицы users)
-    - total_messages, messages_today, limit, remaining
+    - total_messages (из chat_history)
+    - balance (из message_limits)
     """
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("""
@@ -438,24 +446,15 @@ async def get_user_info(user_id: int) -> dict:
         total_row = await cursor.fetchone()
         total_messages = total_row[0] if total_row else 0
 
-    today_count = await get_message_count_today(user_id)
+    balance = await get_balance(user_id)
     return {
         "user_id": user_id,
         "telegram_name": telegram_name,
         "username": username,
         "created_at": created_at,
         "total_messages": total_messages,
-        "messages_today": today_count,
-        "limit": 20,
-        "remaining": max(0, 20 - today_count)
+        "balance": balance
     }
-
-
-async def reset_user_limit(user_id: int) -> None:
-    """Сбрасывает дневной лимит для пользователя (удаляет запись из message_limits)."""
-    async with aiosqlite.connect(DB_NAME) as conn:
-        await conn.execute("DELETE FROM message_limits WHERE user_id = ?", (user_id,))
-        await conn.commit()
 
 
 async def search_users(query: str) -> List[Dict]:

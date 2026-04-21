@@ -1,8 +1,7 @@
 # handlers/admin.py
 # Модуль администрирования: статистика, пользователи (список, поиск по ID, инфо), рассылка.
-# Пользователи отображаются как кнопки с ID и именем (custom_name или telegram_name).
-# Добавлены кнопки управления пользователем: сброс лимита (с подтверждением) и подарочные сообщения (заглушка).
-# ИСПРАВЛЕНО: в сводке "Всего пользователей" теперь используется get_total_users_count (зарегистрированные).
+# Кнопка сброса лимита заменена на добавление 20 сообщений на баланс.
+# Информация о пользователе теперь отображает баланс.
 
 import os
 import asyncio
@@ -19,7 +18,8 @@ from database import (
     get_user_info,
     get_all_users, get_total_users_count,
     search_users,
-    reset_user_limit
+    add_balance,            # <-- новая функция для пополнения баланса
+    get_balance             # <-- для отображения баланса
 )
 
 logger = logging.getLogger(__name__)
@@ -71,7 +71,7 @@ class SearchState(StatesGroup):
 
 
 # -------------------------------------------------------------------
-# ГЛАВНОЕ МЕНЮ АДМИН-ПАНЕЛИ (СВОДКА) – ИСПРАВЛЕНО
+# ГЛАВНОЕ МЕНЮ АДМИН-ПАНЕЛИ (СВОДКА)
 # -------------------------------------------------------------------
 @router.message(F.text == "🔧 Админ-панель")
 async def admin_panel(message: types.Message, state: FSMContext):
@@ -82,11 +82,10 @@ async def admin_panel(message: types.Message, state: FSMContext):
 
     await state.clear()
 
-    # Теперь считаем зарегистрированных пользователей (таблица users), а не всех писавших
     total_users = await get_total_users_count()
     active_today = await get_active_users_today()
     messages_today = await get_total_messages_today()
-    purchases_today = 0  # заглушка, пока нет оплат
+    purchases_today = 0  # заглушка
 
     stats_text = (
         "🔧 **Админ-панель**\n\n"
@@ -147,7 +146,6 @@ async def show_user_list(message: types.Message, page: int = 0):
         await message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
         return
 
-    # Формируем кнопки для каждого пользователя
     keyboard_rows = []
     for u in users:
         user_id = u['user_id']
@@ -156,7 +154,6 @@ async def show_user_list(message: types.Message, page: int = 0):
         button_text = f"{user_id} – {safe_name}"
         keyboard_rows.append([InlineKeyboardButton(text=button_text, callback_data=f"user_info:{user_id}")])
 
-    # Кнопки пагинации
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"user_page:{page-1}"))
@@ -165,7 +162,6 @@ async def show_user_list(message: types.Message, page: int = 0):
     if nav_buttons:
         keyboard_rows.append(nav_buttons)
 
-    # Общие кнопки
     keyboard_rows.append([InlineKeyboardButton(text="🔍 Поиск по ID", callback_data="admin_search_user")])
     keyboard_rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back_to_panel")])
 
@@ -224,7 +220,7 @@ async def process_search(message: types.Message, state: FSMContext):
         return
 
     query = message.text.strip()
-    users = await search_users(query)   # ищет только по ID (число)
+    users = await search_users(query)
 
     if not users:
         text = f"❌ По запросу «{query}» ничего не найдено."
@@ -291,7 +287,7 @@ async def show_user_list_new_message(message: types.Message, page: int = 0):
 
 
 # -------------------------------------------------------------------
-# ИНФОРМАЦИЯ О ПОЛЬЗОВАТЕЛЕ (ОБНОВЛЁННАЯ)
+# ИНФОРМАЦИЯ О ПОЛЬЗОВАТЕЛЕ (ОБНОВЛЁННАЯ – ПОКАЗЫВАЕТ БАЛАНС)
 # -------------------------------------------------------------------
 @router.callback_query(F.data.startswith("user_info:"))
 async def user_info_callback(callback: types.CallbackQuery):
@@ -302,6 +298,7 @@ async def user_info_callback(callback: types.CallbackQuery):
 
     user_id = int(callback.data.split(":")[1])
     info = await get_user_info(user_id)
+    balance = await get_balance(user_id)
 
     display_name = info.get('custom_name') or info.get('telegram_name') or "Без имени"
     safe_display_name = escape_md(display_name)
@@ -311,14 +308,12 @@ async def user_info_callback(callback: types.CallbackQuery):
     text = (
         f"👤 Информация о пользователе {user_id} – {safe_display_name}\n\n"
         f"🚀 Регистрация: {reg_date}\n"
-        f"💬 Сообщений всего: {info['total_messages']}\n"
-        f"💬 Сообщений сегодня: {info['messages_today']}\n\n"
-        f"Остаток всего:\n"
-        f"Бесплатных: {info['messages_today']}/{info['limit']} (осталось {info['remaining']})"
+        f"💬 Всего сообщений: {info['total_messages']}\n"
+        f"💰 Баланс: {balance} сообщ.\n\n"
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Сбросить бесплатные сообщения", callback_data=f"user_reset_ask:{user_id}")],
+        [InlineKeyboardButton(text="🔄 Добавить 20 сообщений", callback_data=f"user_add_balance_ask:{user_id}")],
         [InlineKeyboardButton(text="🎁 +100 подарочных сообщений", callback_data=f"user_gift:{user_id}")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_users_menu")]
     ])
@@ -331,11 +326,11 @@ async def user_info_callback(callback: types.CallbackQuery):
 
 
 # -------------------------------------------------------------------
-# ПОДТВЕРЖДЕНИЕ СБРОСА ЛИМИТА
+# ПОДТВЕРЖДЕНИЕ ДОБАВЛЕНИЯ 20 СООБЩЕНИЙ
 # -------------------------------------------------------------------
-@router.callback_query(F.data.startswith("user_reset_ask:"))
-async def user_reset_ask_callback(callback: types.CallbackQuery):
-    """Запрашивает подтверждение сброса лимита."""
+@router.callback_query(F.data.startswith("user_add_balance_ask:"))
+async def user_add_balance_ask_callback(callback: types.CallbackQuery):
+    """Запрашивает подтверждение добавления 20 сообщений."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -343,27 +338,28 @@ async def user_reset_ask_callback(callback: types.CallbackQuery):
     user_id = int(callback.data.split(":")[1])
     await callback.answer()
     await callback.message.edit_text(
-        f"⚠️ Вы уверены, что хотите сбросить дневной лимит для пользователя {user_id}?",
+        f"⚠️ Вы уверены, что хотите добавить 20 сообщений пользователю {user_id}?",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Да", callback_data=f"user_reset_confirm:{user_id}"),
+                InlineKeyboardButton(text="✅ Да", callback_data=f"user_add_balance_confirm:{user_id}"),
                 InlineKeyboardButton(text="❌ Нет", callback_data=f"user_info:{user_id}")
             ]
         ])
     )
 
 
-@router.callback_query(F.data.startswith("user_reset_confirm:"))
-async def user_reset_confirm_callback(callback: types.CallbackQuery):
-    """Выполняет сброс лимита и возвращает информацию о пользователе."""
+@router.callback_query(F.data.startswith("user_add_balance_confirm:"))
+async def user_add_balance_confirm_callback(callback: types.CallbackQuery):
+    """Добавляет 20 сообщений на баланс и возвращает информацию о пользователе."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
 
     user_id = int(callback.data.split(":")[1])
-    await reset_user_limit(user_id)
-    await callback.answer("✅ Лимит сброшен", show_alert=True)
+    await add_balance(user_id, 20)
+    await callback.answer("✅ 20 сообщений добавлено", show_alert=True)
 
+    # Обновляем информацию о пользователе
     await user_info_callback(callback)
 
 
@@ -380,7 +376,7 @@ async def user_gift_callback(callback: types.CallbackQuery):
 
 
 # -------------------------------------------------------------------
-# РАССЫЛКА
+# РАССЫЛКА (без изменений)
 # -------------------------------------------------------------------
 @router.callback_query(F.data == "admin_broadcast")
 async def admin_broadcast_callback(callback: types.CallbackQuery, state: FSMContext):
@@ -401,7 +397,7 @@ async def admin_broadcast_callback(callback: types.CallbackQuery, state: FSMCont
 
 @router.message(BroadcastState.waiting_for_message)
 async def process_broadcast(message: types.Message, state: FSMContext, bot: Bot):
-    """Рассылает сообщение всем пользователям."""
+    """Рассылает сообщение всем зарегистрированным пользователям."""
     if not is_admin(message.from_user.id):
         await message.answer("⛔ Доступ запрещён.")
         await state.clear()
@@ -416,7 +412,7 @@ async def process_broadcast(message: types.Message, state: FSMContext, bot: Bot)
 
     user_ids = await get_all_user_ids()
     if not user_ids:
-        await message.answer("⚠️ Нет пользователей для рассылки.", reply_markup=get_main_menu(message.from_user.id))
+        await message.answer("⚠️ Нет зарегистрированных пользователей для рассылки.", reply_markup=get_main_menu(message.from_user.id))
         return
 
     success = 0
@@ -447,7 +443,7 @@ async def process_broadcast(message: types.Message, state: FSMContext, bot: Bot)
 
 
 # -------------------------------------------------------------------
-# ВСПОМОГАТЕЛЬНЫЕ КОМАНДЫ – ИСПРАВЛЕНО
+# ВСПОМОГАТЕЛЬНЫЕ КОМАНДЫ
 # -------------------------------------------------------------------
 @router.callback_query(F.data == "admin_back_to_panel")
 async def back_to_panel(callback: types.CallbackQuery):
