@@ -1,6 +1,7 @@
 # handlers/admin.py
 # Модуль администрирования: статистика, пользователи (список, поиск по ID, инфо), рассылка.
 # Пользователи отображаются как кнопки с ID и @username (если есть).
+# Добавлены кнопки управления пользователем: сброс лимита (с подтверждением) и подарочные сообщения (заглушка).
 
 import os
 import asyncio
@@ -15,7 +16,8 @@ from database import (
     get_total_users, get_active_users_today, get_total_messages_today, get_all_user_ids,
     get_user_info,                # используется для получения информации о пользователе
     get_all_users, get_total_users_count,
-    search_users                  # поиск только по ID
+    search_users,                 # поиск только по ID
+    reset_user_limit              # сброс дневного лимита
 )
 
 logger = logging.getLogger(__name__)
@@ -69,8 +71,7 @@ async def admin_panel(message: types.Message, state: FSMContext):
 
     await state.clear()
 
-    total_users = await get_total_users_count()        # из chat_history (все, кто писал)
-    # Для единообразия можно заменить на get_total_users_count() (только зарегистрированные)
+    total_users = await get_total_users()          # из chat_history (все, кто писал)
     active_today = await get_active_users_today()
     messages_today = await get_total_messages_today()
     purchases_today = 0  # заглушка, пока нет оплат
@@ -286,11 +287,11 @@ async def show_user_list_new_message(message: types.Message, page: int = 0):
 
 
 # -------------------------------------------------------------------
-# ИНФОРМАЦИЯ О ПОЛЬЗОВАТЕЛЕ
+# ИНФОРМАЦИЯ О ПОЛЬЗОВАТЕЛЕ (ОБНОВЛЁННАЯ)
 # -------------------------------------------------------------------
 @router.callback_query(F.data.startswith("user_info:"))
 async def user_info_callback(callback: types.CallbackQuery):
-    """Показывает подробную информацию о пользователе в новом формате."""
+    """Показывает подробную информацию о пользователе с кнопками действий."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -298,18 +299,14 @@ async def user_info_callback(callback: types.CallbackQuery):
     user_id = int(callback.data.split(":")[1])
     info = await get_user_info(user_id)
 
-    # Формируем заголовок как на кнопке: "ID – @username" или "ID – имя"
+    # Заголовок: "ID – @username" или "ID – имя"
     if info.get('username'):
         display_name = f"@{info['username']}"
     else:
         display_name = info['telegram_name'] or "Без имени"
     header = f"👤 Информация о пользователе {user_id} – {display_name}"
 
-    # Дата регистрации (если есть)
-    reg_date = "неизвестно"
-    if info.get('created_at'):
-        # created_at хранится в формате "YYYY-MM-DD HH:MM:SS"
-        reg_date = info['created_at'][:19]  # обрезаем до секунд
+    reg_date = info.get('created_at')[:19] if info.get('created_at') else "неизвестно"
 
     text = (
         f"{header}\n\n"
@@ -320,13 +317,64 @@ async def user_info_callback(callback: types.CallbackQuery):
         f"Бесплатных: {info['messages_today']}/{info['limit']} (осталось {info['remaining']})"
     )
 
+    # Клавиатура с действиями
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Сбросить бесплатные сообщения", callback_data=f"user_reset_ask:{user_id}")],
+        [InlineKeyboardButton(text="🎁 +100 подарочных сообщений", callback_data=f"user_gift:{user_id}")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_users_menu")]
+    ])
+
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+
+
+# -------------------------------------------------------------------
+# ПОДТВЕРЖДЕНИЕ СБРОСА ЛИМИТА
+# -------------------------------------------------------------------
+@router.callback_query(F.data.startswith("user_reset_ask:"))
+async def user_reset_ask_callback(callback: types.CallbackQuery):
+    """Запрашивает подтверждение сброса лимита."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён.", show_alert=True)
+        return
+
+    user_id = int(callback.data.split(":")[1])
+    await callback.answer()
     await callback.message.edit_text(
-        text,
-        parse_mode="Markdown",
+        f"⚠️ Вы уверены, что хотите сбросить дневной лимит для пользователя {user_id}?",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Назад к пользователям", callback_data="admin_users_menu")]
+            [
+                InlineKeyboardButton(text="✅ Да", callback_data=f"user_reset_confirm:{user_id}"),
+                InlineKeyboardButton(text="❌ Нет", callback_data=f"user_info:{user_id}")
+            ]
         ])
     )
+
+
+@router.callback_query(F.data.startswith("user_reset_confirm:"))
+async def user_reset_confirm_callback(callback: types.CallbackQuery):
+    """Выполняет сброс лимита и возвращает информацию о пользователе."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён.", show_alert=True)
+        return
+
+    user_id = int(callback.data.split(":")[1])
+    await reset_user_limit(user_id)
+    await callback.answer("✅ Лимит сброшен", show_alert=True)
+
+    # После сброса заново показываем информацию о пользователе (обновится счётчик)
+    await user_info_callback(callback)
+
+
+# -------------------------------------------------------------------
+# ЗАГЛУШКА ДЛЯ ПОДАРОЧНЫХ СООБЩЕНИЙ
+# -------------------------------------------------------------------
+@router.callback_query(F.data.startswith("user_gift:"))
+async def user_gift_callback(callback: types.CallbackQuery):
+    """Заглушка для добавления подарочных сообщений."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён.", show_alert=True)
+        return
+    await callback.answer("🎁 Функция в разработке", show_alert=True)
 
 
 # -------------------------------------------------------------------
@@ -408,7 +456,7 @@ async def back_to_panel(callback: types.CallbackQuery):
 
     await callback.answer()
 
-    total_users = await get_total_users_count()
+    total_users = await get_total_users()
     active_today = await get_active_users_today()
     messages_today = await get_total_messages_today()
     purchases_today = 0
