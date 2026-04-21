@@ -87,8 +87,21 @@ def get_help_text() -> str:
 # -------------------------------------------------------------------
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
-    """Начинает процесс знакомства: запрашивает имя пользователя."""
+    """При первом запуске сразу сохраняет базовый профиль и запрашивает имя."""
     await state.clear()
+
+    user_id = message.from_user.id
+    telegram_name = message.from_user.full_name or message.from_user.first_name or "Без имени"
+    username = message.from_user.username
+
+    # Сразу сохраняем профиль (без custom_name)
+    await save_user_profile(
+        user_id=user_id,
+        telegram_name=telegram_name,
+        custom_name=None,  # будет обновлено позже
+        username=username
+    )
+
     await state.set_state(NameState.waiting_for_name)
     await message.answer(
         "👋 Добро пожаловать!\n\n"
@@ -102,23 +115,18 @@ async def cmd_start(message: types.Message, state: FSMContext):
 # -------------------------------------------------------------------
 @dp.message(NameState.waiting_for_name)
 async def process_name(message: types.Message, state: FSMContext):
-    """
-    Сохраняет имя пользователя (включая username) в БД и показывает главное меню.
-    """
+    """Обновляет custom_name и показывает главное меню."""
     user_name = message.text.strip()
 
     if len(user_name) > 50:
         await message.answer("⚠️ Имя слишком длинное. Пожалуйста, введите покороче.")
         return
 
-    # Сохраняем имя в FSM (может пригодиться в других обработчиках)
     await state.update_data(user_name=user_name)
 
-    # Получаем данные из Telegram
+    # Обновляем профиль, добавляя custom_name
     telegram_name = message.from_user.full_name or message.from_user.first_name or "Без имени"
-    username = message.from_user.username   # Может быть None, если пользователь не установил @username
-
-    # Сохраняем профиль в БД (добавлен username)
+    username = message.from_user.username
     await save_user_profile(
         user_id=message.from_user.id,
         telegram_name=telegram_name,
