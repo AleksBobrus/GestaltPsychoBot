@@ -126,12 +126,17 @@ async def show_user_list(message: types.Message, page: int = 0):
     else:
         lines = [f"👥 **Пользователи (стр. {page+1}):**\n"]
         for u in users:
+            # Формируем кликабельную ссылку на профиль Telegram
+            profile_link = f"tg://user?id={u['user_id']}"
             # Отображаем @username, если он есть, иначе telegram_name
             if u.get('username'):
-                name = f"@{u['username']}"
+                # Если есть username, показываем @username как ссылку
+                display_name = f"[@{u['username']}]({profile_link})"
             else:
+                # Если username нет, показываем telegram_name как ссылку
                 name = u['telegram_name'] or "Без имени"
-            lines.append(f"`{u['user_id']}` – {name}")
+                display_name = f"[{name}]({profile_link})"
+            lines.append(f"`{u['user_id']}` – {display_name}")
         text = "\n".join(lines)
 
         # Кнопки пагинации
@@ -179,11 +184,13 @@ async def show_user_list_new_message(message: types.Message, page: int = 0):
     else:
         lines = [f"👥 **Пользователи (стр. {page+1}):**\n"]
         for u in users:
+            profile_link = f"tg://user?id={u['user_id']}"
             if u.get('username'):
-                name = f"@{u['username']}"
+                display_name = f"[@{u['username']}]({profile_link})"
             else:
                 name = u['telegram_name'] or "Без имени"
-            lines.append(f"`{u['user_id']}` – {name}")
+                display_name = f"[{name}]({profile_link})"
+            lines.append(f"`{u['user_id']}` – {display_name}")
         text = "\n".join(lines)
 
         nav_buttons = []
@@ -268,11 +275,13 @@ async def process_search(message: types.Message, state: FSMContext):
     else:
         lines = [f"🔍 **Результаты поиска «{query}»:**\n"]
         for u in users:
+            profile_link = f"tg://user?id={u['user_id']}"
             if u.get('username'):
-                name = f"@{u['username']}"
+                display_name = f"[@{u['username']}]({profile_link})"
             else:
                 name = u['telegram_name'] or "Без имени"
-            lines.append(f"`{u['user_id']}` – {name}")
+                display_name = f"[{name}]({profile_link})"
+            lines.append(f"`{u['user_id']}` – {display_name}")
         text = "\n".join(lines)
 
         keyboard_rows = []
@@ -477,10 +486,12 @@ async def cmd_users(message: types.Message):
 
     lines = ["👥 **Последние 20 пользователей:**\n"]
     for u in users:
+        profile_link = f"tg://user?id={u['user_id']}"
         if u.get('username'):
-            name = f"@{u['username']}"
+            display_name = f"[@{u['username']}]({profile_link})"
         else:
             name = u['telegram_name'] or "Без имени"
-        lines.append(f"`{u['user_id']}` – {name}")
+            display_name = f"[{name}]({profile_link})"
+        lines.append(f"`{u['user_id']}` – {display_name}")
 
     await message.answer("\n".join(lines), parse_mode="Markdown")
