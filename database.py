@@ -2,7 +2,7 @@
 # Асинхронный модуль для работы с SQLite (aiosqlite).
 # Сохраняет всю функциональность: историю диалогов, тест Бека, лимиты, суммаризации,
 # профили пользователей (с username). Добавлена миграция для столбца username.
-# Поиск пользователей теперь только по ID (точное совпадение числа).
+# ИСПРАВЛЕНО: явный порядок полей в SELECT после ALTER TABLE.
 
 import aiosqlite
 from datetime import datetime, date
@@ -65,17 +65,18 @@ async def init_db() -> None:
         """)
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_summaries_user_id ON summaries(user_id)")
 
-        # Таблица профилей пользователей (создаём, если ещё нет)
+        # Таблица профилей пользователей (создаём с полями в правильном порядке)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
                 telegram_name TEXT,
                 custom_name TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                username TEXT
             )
         """)
 
-        # МИГРАЦИЯ: добавляем столбец username, если он отсутствует
+        # МИГРАЦИЯ: добавляем столбец username, если он отсутствует (для старых БД)
         cursor = await conn.execute("PRAGMA table_info(users)")
         columns = await cursor.fetchall()
         column_names = [col[1] for col in columns]
@@ -337,15 +338,18 @@ async def get_all_user_ids() -> List[int]:
 # -------------------------------------------------------------------
 # ПРОФИЛИ ПОЛЬЗОВАТЕЛЕЙ (ДЛЯ АДМИН-ПАНЕЛИ)
 # -------------------------------------------------------------------
-async def save_user_profile(user_id: int, telegram_name: str, custom_name: str, username: str | None) -> None:
-    """Сохраняет или обновляет профиль пользователя (включая username)."""
+async def save_user_profile(user_id: int, telegram_name: str, custom_name: str | None, username: str | None) -> None:
+    """
+    Сохраняет или обновляет профиль пользователя (включая username).
+    custom_name может быть None (при первом сохранении).
+    """
     async with aiosqlite.connect(DB_NAME) as conn:
         await conn.execute("""
             INSERT INTO users (user_id, telegram_name, custom_name, username)
             VALUES (?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 telegram_name = excluded.telegram_name,
-                custom_name = excluded.custom_name,
+                custom_name = COALESCE(excluded.custom_name, custom_name),
                 username = excluded.username
         """, (user_id, telegram_name, custom_name, username))
         await conn.commit()
@@ -363,21 +367,14 @@ async def get_user_custom_name(user_id: int) -> str | None:
 
 async def get_all_users(limit: int = 50, offset: int = 0) -> List[Dict]:
     """
-    Возвращает список уникальных пользователей из chat_history с пагинацией.
-    Данные профиля (telegram_name, custom_name, username) подтягиваются из таблицы users,
-    если они там есть. Если записи в users нет, возвращаются только user_id и пустые поля.
+    Возвращает список пользователей с пагинацией.
+    Явно указываем порядок полей: user_id, telegram_name, custom_name, created_at, username.
     """
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("""
-            SELECT DISTINCT ch.user_id,
-                   u.telegram_name,
-                   u.custom_name,
-                   u.username,
-                   MIN(ch.timestamp) as first_seen
-            FROM chat_history ch
-            LEFT JOIN users u ON ch.user_id = u.user_id
-            GROUP BY ch.user_id
-            ORDER BY first_seen DESC
+            SELECT user_id, telegram_name, custom_name, created_at, username
+            FROM users
+            ORDER BY created_at DESC
             LIMIT ? OFFSET ?
         """, (limit, offset))
         rows = await cursor.fetchall()
@@ -386,17 +383,17 @@ async def get_all_users(limit: int = 50, offset: int = 0) -> List[Dict]:
                 "user_id": row[0],
                 "telegram_name": row[1],
                 "custom_name": row[2],
-                "username": row[3],
-                "first_seen": row[4]
+                "created_at": row[3],
+                "username": row[4]
             }
             for row in rows
         ]
 
 
 async def get_total_users_count() -> int:
-    """Общее количество уникальных пользователей в chat_history."""
+    """Общее количество записей в таблице users."""
     async with aiosqlite.connect(DB_NAME) as conn:
-        cursor = await conn.execute("SELECT COUNT(DISTINCT user_id) FROM chat_history")
+        cursor = await conn.execute("SELECT COUNT(*) FROM users")
         row = await cursor.fetchone()
         return row[0] if row else 0
 
@@ -408,7 +405,6 @@ async def get_user_info(user_id: int) -> dict:
     - total_messages, messages_today, limit, remaining
     """
     async with aiosqlite.connect(DB_NAME) as conn:
-        # Получаем данные профиля из таблицы users
         cursor = await conn.execute("""
             SELECT telegram_name, username, created_at
             FROM users
@@ -421,7 +417,6 @@ async def get_user_info(user_id: int) -> dict:
         else:
             telegram_name, username, created_at = None, None, None
 
-        # Общее количество сообщений пользователя (роль 'user')
         cursor = await conn.execute("""
             SELECT COUNT(*) FROM chat_history
             WHERE user_id = ? AND role = 'user'
@@ -429,9 +424,7 @@ async def get_user_info(user_id: int) -> dict:
         total_row = await cursor.fetchone()
         total_messages = total_row[0] if total_row else 0
 
-    # Количество сообщений сегодня (из отдельной функции)
     today_count = await get_message_count_today(user_id)
-
     return {
         "user_id": user_id,
         "telegram_name": telegram_name,
@@ -460,7 +453,7 @@ async def search_users(query: str) -> List[Dict]:
         try:
             user_id = int(query)
             cursor = await conn.execute("""
-                SELECT user_id, telegram_name, custom_name, username
+                SELECT user_id, telegram_name, custom_name, created_at, username
                 FROM users
                 WHERE user_id = ?
             """, (user_id,))
@@ -471,11 +464,10 @@ async def search_users(query: str) -> List[Dict]:
                         "user_id": row[0],
                         "telegram_name": row[1],
                         "custom_name": row[2],
-                        "username": row[3]
+                        "username": row[4]   # username теперь на позиции 4
                     }
                     for row in rows
                 ]
         except ValueError:
-            # Не число – возвращаем пустой список
             return []
     return []

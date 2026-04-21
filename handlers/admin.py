@@ -1,11 +1,13 @@
 # handlers/admin.py
 # Модуль администрирования: статистика, пользователи (список, поиск по ID, инфо), рассылка.
-# Пользователи отображаются как кнопки с ID и @username (если есть).
+# Пользователи отображаются как кнопки с ID и именем (custom_name или telegram_name).
 # Добавлены кнопки управления пользователем: сброс лимита (с подтверждением) и подарочные сообщения (заглушка).
+# ИСПРАВЛЕНО: в сводке "Всего пользователей" теперь используется get_total_users_count (зарегистрированные).
 
 import os
 import asyncio
 import logging
+import re
 from aiogram import Router, types, F, Bot
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -13,11 +15,11 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from keyboards import get_main_menu
 from database import (
-    get_total_users, get_active_users_today, get_total_messages_today, get_all_user_ids,
-    get_user_info,                # используется для получения информации о пользователе
+    get_active_users_today, get_total_messages_today, get_all_user_ids,
+    get_user_info,
     get_all_users, get_total_users_count,
-    search_users,                 # поиск только по ID
-    reset_user_limit              # сброс дневного лимита
+    search_users,
+    reset_user_limit
 )
 
 logger = logging.getLogger(__name__)
@@ -30,6 +32,15 @@ router = Router()
 def is_admin(user_id: int) -> bool:
     """Проверяет, является ли пользователь администратором."""
     return user_id in ADMIN_IDS
+
+
+# -------------------------------------------------------------------
+# СОБСТВЕННАЯ ФУНКЦИЯ ЭКРАНИРОВАНИЯ MARKDOWN
+# -------------------------------------------------------------------
+def escape_md(text: str) -> str:
+    """Экранирует спецсимволы Markdown: _ * [ ] ( ) ~ ` > # + - = | { } . !"""
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
 
 # -------------------------------------------------------------------
@@ -60,7 +71,7 @@ class SearchState(StatesGroup):
 
 
 # -------------------------------------------------------------------
-# ГЛАВНОЕ МЕНЮ АДМИН-ПАНЕЛИ (СВОДКА)
+# ГЛАВНОЕ МЕНЮ АДМИН-ПАНЕЛИ (СВОДКА) – ИСПРАВЛЕНО
 # -------------------------------------------------------------------
 @router.message(F.text == "🔧 Админ-панель")
 async def admin_panel(message: types.Message, state: FSMContext):
@@ -71,7 +82,8 @@ async def admin_panel(message: types.Message, state: FSMContext):
 
     await state.clear()
 
-    total_users = await get_total_users()          # из chat_history (все, кто писал)
+    # Теперь считаем зарегистрированных пользователей (таблица users), а не всех писавших
+    total_users = await get_total_users_count()
     active_today = await get_active_users_today()
     messages_today = await get_total_messages_today()
     purchases_today = 0  # заглушка, пока нет оплат
@@ -117,10 +129,10 @@ async def admin_users_menu(callback: types.CallbackQuery):
 async def show_user_list(message: types.Message, page: int = 0):
     """
     Отображает страницу списка пользователей.
-    Каждый пользователь — отдельная кнопка с ID и @username (или именем).
+    Каждый пользователь — отдельная кнопка с ID и именем (custom_name или telegram_name).
     """
     per_page = 10
-    total_users = await get_total_users_count()   # только зарегистрированные (таблица users)
+    total_users = await get_total_users_count()
     offset = page * per_page
     users = await get_all_users(limit=per_page, offset=offset)
 
@@ -139,12 +151,9 @@ async def show_user_list(message: types.Message, page: int = 0):
     keyboard_rows = []
     for u in users:
         user_id = u['user_id']
-        # Текст кнопки: ID – @username (если есть) или ID – имя
-        if u.get('username'):
-            button_text = f"{user_id} – @{u['username']}"
-        else:
-            name = u['telegram_name'] or "Без имени"
-            button_text = f"{user_id} – {name}"
+        name = u.get('custom_name') or u.get('telegram_name') or "Без имени"
+        safe_name = escape_md(name)
+        button_text = f"{user_id} – {safe_name}"
         keyboard_rows.append([InlineKeyboardButton(text=button_text, callback_data=f"user_info:{user_id}")])
 
     # Кнопки пагинации
@@ -161,7 +170,10 @@ async def show_user_list(message: types.Message, page: int = 0):
     keyboard_rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back_to_panel")])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
-    await message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+    try:
+        await message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+    except Exception:  # noqa
+        await message.edit_text(text.replace("*", ""), reply_markup=keyboard)
 
 
 # -------------------------------------------------------------------
@@ -200,9 +212,7 @@ async def admin_search_user(callback: types.CallbackQuery, state: FSMContext):
 
 @router.message(SearchState.waiting_for_query)
 async def process_search(message: types.Message, state: FSMContext):
-    """
-    Выполняет поиск по ID и показывает результаты в виде кнопок.
-    """
+    """Выполняет поиск по ID и показывает результаты в виде кнопок."""
     if not is_admin(message.from_user.id):
         await message.answer("⛔ Доступ запрещён.")
         await state.clear()
@@ -228,11 +238,9 @@ async def process_search(message: types.Message, state: FSMContext):
         keyboard_rows = []
         for u in users:
             user_id = u['user_id']
-            if u.get('username'):
-                button_text = f"{user_id} – @{u['username']}"
-            else:
-                name = u['telegram_name'] or "Без имени"
-                button_text = f"{user_id} – {name}"
+            name = u.get('custom_name') or u.get('telegram_name') or "Без имени"
+            safe_name = escape_md(name)
+            button_text = f"{user_id} – {safe_name}"
             keyboard_rows.append([InlineKeyboardButton(text=button_text, callback_data=f"user_info:{user_id}")])
         keyboard_rows.append([InlineKeyboardButton(text="🔙 К списку пользователей", callback_data="admin_users_menu")])
         keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
@@ -242,9 +250,7 @@ async def process_search(message: types.Message, state: FSMContext):
 
 
 async def show_user_list_new_message(message: types.Message, page: int = 0):
-    """
-    Отправляет новое сообщение со списком пользователей (используется при отмене поиска).
-    """
+    """Отправляет новое сообщение со списком пользователей (используется при отмене поиска)."""
     per_page = 10
     total_users = await get_total_users_count()
     offset = page * per_page
@@ -264,11 +270,9 @@ async def show_user_list_new_message(message: types.Message, page: int = 0):
     keyboard_rows = []
     for u in users:
         user_id = u['user_id']
-        if u.get('username'):
-            button_text = f"{user_id} – @{u['username']}"
-        else:
-            name = u['telegram_name'] or "Без имени"
-            button_text = f"{user_id} – {name}"
+        name = u.get('custom_name') or u.get('telegram_name') or "Без имени"
+        safe_name = escape_md(name)
+        button_text = f"{user_id} – {safe_name}"
         keyboard_rows.append([InlineKeyboardButton(text=button_text, callback_data=f"user_info:{user_id}")])
 
     nav_buttons = []
@@ -299,17 +303,13 @@ async def user_info_callback(callback: types.CallbackQuery):
     user_id = int(callback.data.split(":")[1])
     info = await get_user_info(user_id)
 
-    # Заголовок: "ID – @username" или "ID – имя"
-    if info.get('username'):
-        display_name = f"@{info['username']}"
-    else:
-        display_name = info['telegram_name'] or "Без имени"
-    header = f"👤 Информация о пользователе {user_id} – {display_name}"
+    display_name = info.get('custom_name') or info.get('telegram_name') or "Без имени"
+    safe_display_name = escape_md(display_name)
 
     reg_date = info.get('created_at')[:19] if info.get('created_at') else "неизвестно"
 
     text = (
-        f"{header}\n\n"
+        f"👤 Информация о пользователе {user_id} – {safe_display_name}\n\n"
         f"🚀 Регистрация: {reg_date}\n"
         f"💬 Сообщений всего: {info['total_messages']}\n"
         f"💬 Сообщений сегодня: {info['messages_today']}\n\n"
@@ -317,14 +317,17 @@ async def user_info_callback(callback: types.CallbackQuery):
         f"Бесплатных: {info['messages_today']}/{info['limit']} (осталось {info['remaining']})"
     )
 
-    # Клавиатура с действиями
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Сбросить бесплатные сообщения", callback_data=f"user_reset_ask:{user_id}")],
         [InlineKeyboardButton(text="🎁 +100 подарочных сообщений", callback_data=f"user_gift:{user_id}")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_users_menu")]
     ])
 
-    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+    try:
+        await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+    except Exception:  # noqa
+        plain_text = text.replace("*", "").replace("_", "").replace("`", "")
+        await callback.message.edit_text(plain_text, reply_markup=keyboard)
 
 
 # -------------------------------------------------------------------
@@ -361,7 +364,6 @@ async def user_reset_confirm_callback(callback: types.CallbackQuery):
     await reset_user_limit(user_id)
     await callback.answer("✅ Лимит сброшен", show_alert=True)
 
-    # После сброса заново показываем информацию о пользователе (обновится счётчик)
     await user_info_callback(callback)
 
 
@@ -445,7 +447,7 @@ async def process_broadcast(message: types.Message, state: FSMContext, bot: Bot)
 
 
 # -------------------------------------------------------------------
-# ВСПОМОГАТЕЛЬНЫЕ КОМАНДЫ
+# ВСПОМОГАТЕЛЬНЫЕ КОМАНДЫ – ИСПРАВЛЕНО
 # -------------------------------------------------------------------
 @router.callback_query(F.data == "admin_back_to_panel")
 async def back_to_panel(callback: types.CallbackQuery):
@@ -456,7 +458,7 @@ async def back_to_panel(callback: types.CallbackQuery):
 
     await callback.answer()
 
-    total_users = await get_total_users()
+    total_users = await get_total_users_count()
     active_today = await get_active_users_today()
     messages_today = await get_total_messages_today()
     purchases_today = 0
@@ -498,7 +500,7 @@ async def cmd_stats(message: types.Message):
         await message.answer("⛔ У вас нет доступа к этой команде.")
         return
 
-    total_users = await get_total_users()
+    total_users = await get_total_users_count()
     active_today = await get_active_users_today()
     messages_today = await get_total_messages_today()
 
@@ -540,10 +542,7 @@ async def cmd_users(message: types.Message):
 
     lines = ["👥 **Последние 20 пользователей:**\n"]
     for u in users:
-        if u.get('username'):
-            name = f"@{u['username']}"
-        else:
-            name = u['telegram_name'] or "Без имени"
+        name = u.get('custom_name') or u.get('telegram_name') or "Без имени"
         lines.append(f"`{u['user_id']}` – {name}")
 
     await message.answer("\n".join(lines), parse_mode="Markdown")

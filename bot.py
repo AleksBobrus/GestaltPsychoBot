@@ -95,12 +95,14 @@ async def cmd_start(message: types.Message, state: FSMContext):
     username = message.from_user.username
 
     # Сразу сохраняем профиль (без custom_name)
+    print(f"[DEBUG] Saving user {user_id} at /start")
     await save_user_profile(
         user_id=user_id,
         telegram_name=telegram_name,
         custom_name=None,  # будет обновлено позже
         username=username
     )
+    print(f"[DEBUG] User {user_id} saved")
 
     await state.set_state(NameState.waiting_for_name)
     await message.answer(
