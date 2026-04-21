@@ -2,11 +2,11 @@
 # Обработчики режима диалога с ИИ-психологом.
 # Включает: вход/выход, атомарную проверку лимита, детектор кризиса,
 # вызов DeepSeek API (без стриминга), суммаризацию и сохранение истории.
+# Добавлен учёт сессий.
 
 import logging
 import os
 from dotenv import load_dotenv
-
 from aiogram import types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -16,33 +16,33 @@ from ai_client import get_ai_response, create_summary
 from database import (
     save_message, get_recent_history,
     try_decrement_balance,
-    count_user_messages, get_messages_for_summary, save_summary, get_all_summaries
+    count_user_messages, get_messages_for_summary, save_summary, get_all_summaries,
+    start_session, end_session, increment_session_message_count, get_session_message_count
 )
 from crisis_detector import detect_crisis, get_crisis_response
 
 load_dotenv()
 CRISIS_ENABLED = os.getenv("CRISIS_DETECTOR_ENABLED", "True").lower() == "true"
 
-# Логгер для этого модуля
 logger = logging.getLogger(__name__)
 
 
-# Состояние конечного автомата для диалога
 class DialogState(StatesGroup):
-    waiting_for_message = State()   # бот ожидает сообщение от пользователя
+    waiting_for_message = State()
 
 
 # -------------------------------------------------------------------
 # ВХОД В ДИАЛОГ
 # -------------------------------------------------------------------
 async def start_talk(message: types.Message, state: FSMContext):
-    """
-    Обработчик нажатия кнопки "💬 Поговорить".
-    Устанавливает состояние диалога и показывает клавиатуру с кнопкой выхода.
-    """
     await state.set_state(DialogState.waiting_for_message)
+
+    # Начинаем сессию и сохраняем её ID
+    session_id = await start_session(message.from_user.id)
+    await state.update_data(session_id=session_id)
+
     await message.answer(
-        "💬 Режим беседы включён. Напишите, что вас беспокоит.\n"
+        "🧠 Режим беседы включён. Напишите, что вас беспокоит.\n"
         "Чтобы завершить диалог, нажмите кнопку ниже.",
         reply_markup=dialog_kb
     )
@@ -52,10 +52,13 @@ async def start_talk(message: types.Message, state: FSMContext):
 # ВЫХОД ИЗ ДИАЛОГА
 # -------------------------------------------------------------------
 async def exit_dialog(message: types.Message, state: FSMContext):
-    """
-    Обработчик кнопки "❌ Завершить диалог".
-    Сбрасывает состояние и возвращает главное меню.
-    """
+    data = await state.get_data()
+    session_id = data.get("session_id")
+
+    if session_id:
+        count = await get_session_message_count(session_id)
+        await end_session(session_id, count)
+
     await state.clear()
     await message.answer("Диалог завершён.", reply_markup=get_main_menu(message.from_user.id))
 
@@ -63,10 +66,7 @@ async def exit_dialog(message: types.Message, state: FSMContext):
 # -------------------------------------------------------------------
 # ОСНОВНОЙ ОБРАБОТЧИК СООБЩЕНИЙ В ДИАЛОГЕ
 # -------------------------------------------------------------------
-async def process_dialog(message: types.Message, state: FSMContext):    # noqa
-    """
-    Главная логика диалога (новая модель баланса).
-    """
+async def process_dialog(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     user_text = message.text
 
@@ -81,7 +81,7 @@ async def process_dialog(message: types.Message, state: FSMContext):    # noqa
         )
         return
 
-    # ---------- 2. ДЕТЕКЦИЯ КРИЗИСНЫХ ФРАЗ ----------
+    # ---------- 2. ДЕТЕКЦИЯ КРИЗИСА ----------
     if CRISIS_ENABLED:
         is_crisis, matched_phrase = detect_crisis(user_text)
         if is_crisis:
@@ -95,13 +95,18 @@ async def process_dialog(message: types.Message, state: FSMContext):    # noqa
             await save_message(user_id, "system", "[CRISIS DETECTED]")
             return
 
-    # ---------- 3. СОХРАНЕНИЕ СООБЩЕНИЯ ПОЛЬЗОВАТЕЛЯ ----------
+    # ---------- 3. СОХРАНЕНИЕ СООБЩЕНИЯ И УВЕЛИЧЕНИЕ СЧЁТЧИКА СЕССИИ ----------
     await save_message(user_id, "user", user_text)
+
+    data = await state.get_data()
+    session_id = data.get("session_id")
+    if session_id:
+        await increment_session_message_count(session_id)
 
     # ---------- 4. ТРИГГЕР СУММАРИЗАЦИИ ----------
     total_user_messages = await count_user_messages(user_id)
     if total_user_messages > 0 and total_user_messages % 30 == 0:
-        logger.info(f"Создание суммаризации для пользователя {user_id} ({total_user_messages} сообщений)")
+        logger.info(f"Создание суммаризации для {user_id} ({total_user_messages} сообщений)")
         messages_to_summarize, start_id, end_id = await get_messages_for_summary(user_id, limit=30)
         if messages_to_summarize:
             summary_text = await create_summary(messages_to_summarize)
@@ -118,10 +123,7 @@ async def process_dialog(message: types.Message, state: FSMContext):    # noqa
     history = []
     if summaries:
         combined_summary = "\n\n---\n\n".join(summaries)
-        history.append({
-            "role": "system",
-            "content": f"Контекст предыдущих диалогов:\n{combined_summary}"
-        })
+        history.append({"role": "system", "content": f"Контекст предыдущих диалогов:\n{combined_summary}"})
     history.extend(recent_messages)
 
     # ---------- 7. ВЫЗОВ DEEPSEEK API ----------
@@ -146,14 +148,11 @@ async def process_dialog(message: types.Message, state: FSMContext):    # noqa
     if reply:
         await save_message(user_id, "assistant", reply)
 
+
 # -------------------------------------------------------------------
-# РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ В ДИСПЕТЧЕРЕ
+# РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ
 # -------------------------------------------------------------------
 def register_dialog_handlers(dp):
-    """
-    Подключает все обработчики диалога к переданному диспетчеру.
-    Вызывается из bot.py.
-    """
     dp.message.register(start_talk, F.text == "💬 Начать сессию")
     dp.message.register(exit_dialog, DialogState.waiting_for_message, F.text == "❌ Завершить диалог")
     dp.message.register(process_dialog, DialogState.waiting_for_message, F.text)

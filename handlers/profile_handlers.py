@@ -1,6 +1,6 @@
 # handlers/profile_handlers.py
 # Личный кабинет пользователя: баланс сообщений, история тестов, приглашение друга, покупки.
-# Кнопка "Пригласить друга" показывает реферальную ссылку и статистику.
+# Добавлен подсчёт сессий.
 
 import logging
 from aiogram import Router, types, F
@@ -9,7 +9,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from keyboards import get_main_menu
 from database import (
     get_user_info, get_user_bdi_results, get_balance,
-    get_referral_count          # <-- добавлен импорт
+    get_referral_count, get_total_sessions
 )
 
 logger = logging.getLogger(__name__)
@@ -17,9 +17,6 @@ router = Router()
 
 
 def get_profile_keyboard() -> InlineKeyboardMarkup:
-    """
-    Инлайн-клавиатура для главного экрана личного кабинета.
-    """
     buttons = [
         [InlineKeyboardButton(text="📜 История тестов", callback_data="profile_tests")],
         [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="profile_invite")],
@@ -30,9 +27,6 @@ def get_profile_keyboard() -> InlineKeyboardMarkup:
 
 
 def get_tests_keyboard() -> InlineKeyboardMarkup:
-    """
-    Инлайн-клавиатура для раздела истории тестов.
-    """
     buttons = [
         [InlineKeyboardButton(text="📋 Пройти тест", callback_data="profile_start_test")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="profile_back_from_tests")]
@@ -40,9 +34,6 @@ def get_tests_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-# -------------------------------------------------------------------
-# ТОЧКА ВХОДА: КНОПКА «👤 ЛИЧНЫЙ КАБИНЕТ»
-# -------------------------------------------------------------------
 @router.message(F.text == "👤 Личный кабинет")
 async def profile_main(message: types.Message, state: FSMContext):
     await state.clear()
@@ -69,11 +60,12 @@ async def profile_main(message: types.Message, state: FSMContext):
         test_line = "📋 Тест Бека: не пройден"
 
     balance = await get_balance(user_id)
+    total_sessions = await get_total_sessions(user_id)
 
     text = (
         "👤 **Личный кабинет**\n\n"
         f"{test_line}\n"
-        f"📅 Всего сессий: (в разработке)\n"
+        f"📅 Всего сессий: {total_sessions}\n"
         f"💰 Баланс: {balance} сообщ.\n\n"
         "Выберите действие:"
     )
@@ -81,9 +73,6 @@ async def profile_main(message: types.Message, state: FSMContext):
     await message.answer(text, parse_mode="Markdown", reply_markup=get_profile_keyboard())
 
 
-# -------------------------------------------------------------------
-# ОБРАБОТЧИКИ ИНЛАЙН-КНОПОК
-# -------------------------------------------------------------------
 @router.callback_query(F.data == "profile_tests")
 async def profile_tests(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -135,11 +124,12 @@ async def profile_back_from_tests(callback: types.CallbackQuery):
         test_line = "📋 Тест Бека: не пройден"
 
     balance = await get_balance(user_id)
+    total_sessions = await get_total_sessions(user_id)
 
     text = (
         "👤 **Личный кабинет**\n\n"
         f"{test_line}\n"
-        f"📅 Всего сессий: (в разработке)\n"
+        f"📅 Всего сессий: {total_sessions}\n"
         f"💰 Баланс: {balance} сообщ.\n\n"
         "Выберите действие:"
     )
@@ -148,12 +138,8 @@ async def profile_back_from_tests(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# -------------------------------------------------------------------
-# КНОПКА «ПРИГЛАСИТЬ ДРУГА» (ПОЛНОСТЬЮ РАБОТАЕТ)
-# -------------------------------------------------------------------
 @router.callback_query(F.data == "profile_invite")
 async def profile_invite(callback: types.CallbackQuery):
-    """Показывает реферальную ссылку и количество приглашённых."""
     user_id = callback.from_user.id
     bot_username = (await callback.bot.get_me()).username
     ref_link = f"https://t.me/{bot_username}?start=ref{user_id}"
@@ -178,9 +164,6 @@ async def profile_invite(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# -------------------------------------------------------------------
-# ЗАГЛУШКИ ОСТАЛЬНЫХ КНОПОК
-# -------------------------------------------------------------------
 @router.callback_query(F.data == "profile_purchases")
 async def profile_purchases(callback: types.CallbackQuery):
     await callback.answer("🛒 Возможность покупки сообщений появится в будущем.", show_alert=True)

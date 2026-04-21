@@ -1,6 +1,6 @@
 # database.py
 # Асинхронный модуль для работы с SQLite (aiosqlite).
-# Хранит историю диалогов, тест Бека, баланс сообщений, суммаризации, профили, рефералы.
+# Хранит историю диалогов, тест Бека, баланс сообщений, суммаризации, профили, рефералы, сессии.
 
 import aiosqlite
 from datetime import datetime, date
@@ -91,7 +91,7 @@ async def init_db() -> None:
             await conn.execute("ALTER TABLE users ADD COLUMN username TEXT")
             print("[MIGRATION] Столбец 'username' добавлен в таблицу 'users'")
 
-        # НОВАЯ ТАБЛИЦА: реферальная система
+        # Таблица рефералов
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS referrals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -100,6 +100,17 @@ async def init_db() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 bonus_given BOOLEAN DEFAULT 0,
                 UNIQUE(invited_id)
+            )
+        """)
+
+        # НОВАЯ ТАБЛИЦА: сессии (подсчёт количества диалогов)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                started_at TIMESTAMP,
+                ended_at TIMESTAMP,
+                message_count INTEGER DEFAULT 0
             )
         """)
 
@@ -480,7 +491,7 @@ async def search_users(query: str) -> List[Dict]:
 
 
 # -------------------------------------------------------------------
-# НОВЫЕ ФУНКЦИИ: РЕФЕРАЛЬНАЯ СИСТЕМА
+# РЕФЕРАЛЬНАЯ СИСТЕМА
 # -------------------------------------------------------------------
 async def add_referral(inviter_id: int, invited_id: int) -> bool:
     """
@@ -539,3 +550,70 @@ async def get_inviter_id(invited_id: int) -> int | None:
         """, (invited_id,))
         row = await cursor.fetchone()
         return row[0] if row else None
+
+
+# -------------------------------------------------------------------
+# СЕССИИ (ПОДСЧЁТ КОЛИЧЕСТВА ДИАЛОГОВ)
+# -------------------------------------------------------------------
+async def start_session(user_id: int) -> int:
+    """
+    Начинает новую сессию для пользователя.
+    Возвращает ID созданной сессии.
+    """
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute("""
+            INSERT INTO sessions (user_id, started_at)
+            VALUES (?, ?)
+            RETURNING id
+        """, (user_id, datetime.now()))
+        row = await cursor.fetchone()
+        await conn.commit()
+        return row[0] if row else 0
+
+
+async def end_session(session_id: int, message_count: int = 0) -> None:
+    """
+    Завершает сессию, устанавливая ended_at и количество сообщений.
+    Если message_count = 0, сессия удаляется как несостоявшаяся.
+    """
+    if message_count > 0:
+        async with aiosqlite.connect(DB_NAME) as conn:
+            await conn.execute("""
+                UPDATE sessions
+                SET ended_at = ?, message_count = ?
+                WHERE id = ?
+            """, (datetime.now(), message_count, session_id))
+            await conn.commit()
+    else:
+        async with aiosqlite.connect(DB_NAME) as conn:
+            await conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            await conn.commit()
+
+
+async def increment_session_message_count(session_id: int) -> None:
+    """Увеличивает счётчик сообщений в активной сессии на 1."""
+    async with aiosqlite.connect(DB_NAME) as conn:
+        await conn.execute("""
+            UPDATE sessions SET message_count = message_count + 1
+            WHERE id = ?
+        """, (session_id,))
+        await conn.commit()
+
+
+async def get_session_message_count(session_id: int) -> int:
+    """Возвращает текущее количество сообщений в сессии."""
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute("SELECT message_count FROM sessions WHERE id = ?", (session_id,))
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+
+async def get_total_sessions(user_id: int) -> int:
+    """Возвращает общее количество завершённых сессий пользователя."""
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute("""
+            SELECT COUNT(*) FROM sessions
+            WHERE user_id = ? AND ended_at IS NOT NULL
+        """, (user_id,))
+        row = await cursor.fetchone()
+        return row[0] if row else 0
