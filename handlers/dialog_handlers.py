@@ -154,6 +154,6 @@ def register_dialog_handlers(dp):
     Подключает все обработчики диалога к переданному диспетчеру.
     Вызывается из bot.py.
     """
-    dp.message.register(start_talk, F.text == "💬 Поговорить")
+    dp.message.register(start_talk, F.text == "💬 Начать сессию")
     dp.message.register(exit_dialog, DialogState.waiting_for_message, F.text == "❌ Завершить диалог")
     dp.message.register(process_dialog, DialogState.waiting_for_message, F.text)

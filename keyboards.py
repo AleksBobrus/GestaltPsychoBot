@@ -32,7 +32,7 @@ def get_main_menu(user_id: int) -> ReplyKeyboardMarkup:
     # ДИАГНОСТИКА: выводим ID пользователя и результат проверки is_admin
 
     keyboard = [
-        [KeyboardButton(text="💬 Поговорить"), KeyboardButton(text="📋 Пройти тест")],
+        [KeyboardButton(text="💬 Начать сессию"), KeyboardButton(text="📋 Пройти тест")],
         [KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="ℹ️ О боте")],
     ]
     if is_admin(user_id):
