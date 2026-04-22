@@ -155,7 +155,7 @@ async def profile_invite(callback: types.CallbackQuery):
         "Отправьте ссылку другу, и бонусы начислятся автоматически после его регистрации."
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📋 Скопировать ссылку", copy_text=ref_link)],
+        [InlineKeyboardButton(text="🔗 Открыть ссылку", url=ref_link)],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="profile_back_from_tests")]
     ])
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
