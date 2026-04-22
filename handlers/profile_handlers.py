@@ -11,6 +11,7 @@ from database import (
     get_user_info, get_user_bdi_results, get_balance,
     get_referral_count, get_total_sessions
 )
+from aiogram.types import CopyTextButton
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -154,8 +155,13 @@ async def profile_invite(callback: types.CallbackQuery):
         "• Вы получите **100 сообщений** за каждого друга\n\n"
         "Отправьте ссылку другу, и бонусы начислятся автоматически после его регистрации."
     )
+    # Создаём кнопку копирования через объект CopyTextButton
+    copy_button = InlineKeyboardButton(
+        text="📋 Скопировать ссылку",
+        copy_text=CopyTextButton(text=ref_link)   # <-- правильный синтаксис
+    )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔗 Открыть ссылку", url=ref_link)],
+        [copy_button],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="profile_back_from_tests")]
     ])
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
