@@ -151,16 +151,14 @@ async def profile_invite(callback: types.CallbackQuery):
         f"👥 Приглашено: {count}\n\n"
         "🎉 **Бонусы:**\n"
         "• Друг получит **100 сообщений**\n"
-        "• Вы получите **+100 сообщений** за каждого друга\n\n"
+        "• Вы получите **100 сообщений** за каждого друга\n\n"
         "Отправьте ссылку другу, и бонусы начислятся автоматически после его регистрации."
     )
-    await callback.message.edit_text(
-        text,
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="profile_back_from_tests")]
-        ])
-    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 Скопировать ссылку", copy_text=ref_link)],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="profile_back_from_tests")]
+    ])
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
     await callback.answer()
 
 
