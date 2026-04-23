@@ -33,7 +33,7 @@ def get_main_menu(user_id: int) -> ReplyKeyboardMarkup:
 
     keyboard = [
         [KeyboardButton(text="💬 Начать сессию"), KeyboardButton(text="📋 Пройти тест")],
-        [KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="ℹ️ О боте")],
+        [KeyboardButton(text="🏠 Личный кабинет"), KeyboardButton(text="ℹ️ О боте")],
     ]
     if is_admin(user_id):
         keyboard.append([KeyboardButton(text="🔧 Админ-панель")])

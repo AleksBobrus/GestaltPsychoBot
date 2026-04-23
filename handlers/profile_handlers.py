@@ -22,7 +22,7 @@ def get_profile_keyboard() -> InlineKeyboardMarkup:
     """
     buttons = [
         [InlineKeyboardButton(text="📜 История тестов", callback_data="profile_tests")],
-        [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="profile_invite")],
+        [InlineKeyboardButton(text="💌 Пригласить друга", callback_data="profile_invite")],
         [InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="profile_renew_subscription")],
         [InlineKeyboardButton(text="🔙 Главное меню", callback_data="profile_back_to_main")]
     ]
@@ -41,9 +41,9 @@ def get_tests_keyboard() -> InlineKeyboardMarkup:
 
 
 # -------------------------------------------------------------------
-# ТОЧКА ВХОДА: КНОПКА «👤 ЛИЧНЫЙ КАБИНЕТ»
+# ТОЧКА ВХОДА: КНОПКА «🏠 ЛИЧНЫЙ КАБИНЕТ»
 # -------------------------------------------------------------------
-@router.message(F.text == "👤 Личный кабинет")
+@router.message(F.text == "🏠 Личный кабинет")
 async def profile_main(message: types.Message, state: FSMContext):
     """
     Открывает главное меню личного кабинета.
@@ -80,7 +80,7 @@ async def profile_main(message: types.Message, state: FSMContext):
         sub_text = "❌ Не активна"
 
     text = (
-        "👤 **Личный кабинет**\n"
+        "🏠 **Личный кабинет**\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"{test_line}\n\n"
         f"⏳ *Подписка:* {sub_text}\n"
@@ -161,7 +161,7 @@ async def profile_back_from_tests(callback: types.CallbackQuery):
         sub_text = "❌ Не активна"
 
     text = (
-        "👤 **Личный кабинет**\n"
+        "🏠 **Личный кабинет**\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"{test_line}\n\n"
         f"⏳ *Подписка:* {sub_text}\n"
@@ -184,7 +184,7 @@ async def profile_invite(callback: types.CallbackQuery):
     count = await get_referral_count(user_id)
 
     text = (
-        "🎁 **Пригласи друга**\n"
+        "💌 **Пригласи друга**\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"🔗 *Ваша персональная ссылка:*\n`{ref_link}`\n\n"
         f"👥 Приглашено: *{count}*\n\n"
