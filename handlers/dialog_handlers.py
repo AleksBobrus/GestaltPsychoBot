@@ -40,12 +40,13 @@ async def start_talk(message: types.Message, state: FSMContext):
     await state.update_data(session_id=session_id)
 
     await message.answer(
-        "🌿 **Начало сессии** 🌿\n\n"
-        "💬 Вы можете:\n"
+        "🌿 **Начало сессии** 🌿\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "💬 *Вы можете:*\n"
         "• Написать «Хочу поговорить о…» и поделиться тем, что беспокоит.\n"
         "• Попросить напомнить, о чём мы беседовали в прошлые разы.\n"
         "• Просто написать что угодно — мы начнём диалог.\n\n"
-        "Я здесь и внимательно слушаю 🤍",
+        "_Я здесь и внимательно слушаю_ 🤍",
         parse_mode="Markdown",
         reply_markup=dialog_kb
     )
@@ -63,7 +64,12 @@ async def exit_dialog(message: types.Message, state: FSMContext):
         await end_session(session_id, count)
 
     await state.clear()
-    await message.answer("Диалог завершён.", reply_markup=get_main_menu(message.from_user.id))
+    await message.answer(
+        "✅ *Диалог завершён.*\n"
+        "До новых встреч!",
+        reply_markup=get_main_menu(message.from_user.id),
+        parse_mode="Markdown"
+    )
 
 
 # -------------------------------------------------------------------
@@ -91,14 +97,19 @@ async def process_dialog(message: types.Message, state: FSMContext):
         if days_left is None:
             # Подписка никогда не была активирована (маловероятно, но для надёжности)
             await message.answer(
-                "😔 Ваш пробный период завершён. Чтобы продолжить, оформите Premium-подписку в Личном кабинете.",
-                reply_markup=dialog_kb
+                "😔 *Ваш пробный период завершён.*\n"
+                "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                "Чтобы продолжить, оформите Premium-подписку в Личном кабинете → Купить.",
+                reply_markup=dialog_kb,
+                parse_mode="Markdown"
             )
         else:
             await message.answer(
                 f"⚠️ Ваша Premium-подписка истекла.\n"
+                "━━━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"Продлите её в Личном кабинете.",
-                reply_markup=dialog_kb
+                reply_markup=dialog_kb,
+                parse_mode="Markdown"
             )
         return
 

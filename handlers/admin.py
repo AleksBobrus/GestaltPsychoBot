@@ -83,7 +83,8 @@ async def admin_panel(message: types.Message, state: FSMContext):
     purchases_today = 0  # заглушка
 
     stats_text = (
-        "🔧 **Админ-панель**\n\n"
+        "🔧 **Админ-панель**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "📊 **Сводка на сегодня:**\n"
         f"👥 Всего пользователей: **{total_users}**\n"
         f"📅 Активных сегодня: **{active_today}**\n"
@@ -294,10 +295,14 @@ async def user_info_callback(callback: types.CallbackQuery):
         sub_status = "❌ Не активна"
 
     text = (
-        f"👤 Информация о пользователе {user_id} – {safe_display_name}\n\n"
+        f"👤 **Информация о пользователе**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"ID: **{user_id}**\n"
+        f"Имя: *{safe_display_name}*\n"
         f"🚀 Регистрация: {reg_date}\n"
-        f"💬 Всего сообщений: {info['total_messages']}\n"
-        f"💎 Подписка: {sub_status}\n\n"
+        f"💬 Всего сообщений: **{info['total_messages']}**\n"
+        f"💎 Подписка: {sub_status}\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -305,7 +310,7 @@ async def user_info_callback(callback: types.CallbackQuery):
         [InlineKeyboardButton(text="🔄 Активировать на 20 дней", callback_data=f"user_add_premium_ask:{user_id}:20")],
         [InlineKeyboardButton(text="🔄 Активировать на 30 дней", callback_data=f"user_add_premium_ask:{user_id}:30")],
         [InlineKeyboardButton(text="🚫 Отключить Premium", callback_data=f"user_deactivate_premium_ask:{user_id}")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_users_menu")]
+        [InlineKeyboardButton(text="🔙 Назад к списку", callback_data="admin_users_menu")]
     ])
 
     try:
@@ -328,7 +333,8 @@ async def user_add_premium_ask(callback: types.CallbackQuery):
     days = int(days_str)
     await callback.answer()
     await callback.message.edit_text(
-        f"⚠️ Активировать Premium на {days} дней для пользователя {user_id}?",
+        f"⚠️ *Активировать Premium на {days} дней для пользователя {user_id}?*",
+        parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(text="✅ Да", callback_data=f"user_add_premium_confirm:{user_id}:{days}"),
@@ -362,7 +368,8 @@ async def user_deactivate_premium_ask(callback: types.CallbackQuery):
     user_id = int(callback.data.split(":")[1])
     await callback.answer()
     await callback.message.edit_text(
-        f"⚠️ Отключить Premium для пользователя {user_id}?",
+        f"⚠️ *Отключить Premium для пользователя {user_id}?*",
+        parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(text="✅ Да", callback_data=f"user_deactivate_premium_confirm:{user_id}"),

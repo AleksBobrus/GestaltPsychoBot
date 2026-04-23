@@ -80,9 +80,11 @@ async def profile_main(message: types.Message, state: FSMContext):
         sub_text = "❌ Не активна"
 
     text = (
-        "👤 **Личный кабинет**\n\n"
-        f"{test_line}\n"
-        f"💎 Подписка: {sub_text}\n\n"
+        "👤 **Личный кабинет**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{test_line}\n\n"
+        f"💎 *Подписка:* {sub_text}\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "Выберите действие:"
     )
 
@@ -104,14 +106,21 @@ async def profile_tests(callback: types.CallbackQuery):
         results = []
 
     if not results:
-        text = "📜 **История тестов**\n\nПока вы не прошли ни одного теста."
+        text = (
+            "📜 **История тестов**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Пока вы не прошли ни одного теста."
+        )
     else:
-        lines = ["📜 **Последние результаты теста Бека:**\n"]
+        lines = [
+            "📜 **История тестов**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+        ]
         for r in results:
             date_str = r['date'][:10] if 'date' in r else 'неизвестно'
             score = r.get('score', '?')
             interpretation = r.get('interpretation', '')
-            lines.append(f"{date_str}: {score} баллов – {interpretation}")
+            lines.append(f"📅 {date_str}: *{score} баллов* – {interpretation}")
         text = "\n".join(lines)
 
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=get_tests_keyboard())
@@ -152,9 +161,11 @@ async def profile_back_from_tests(callback: types.CallbackQuery):
         sub_text = "❌ Не активна"
 
     text = (
-        "👤 **Личный кабинет**\n\n"
-        f"{test_line}\n"
-        f"💎 Подписка: {sub_text}\n\n"
+        "👤 **Личный кабинет**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{test_line}\n\n"
+        f"💎 *Подписка:* {sub_text}\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "Выберите действие:"
     )
 
@@ -173,13 +184,14 @@ async def profile_invite(callback: types.CallbackQuery):
     count = await get_referral_count(user_id)
 
     text = (
-        "🎁 **Пригласи друга**\n\n"
-        f"Ваша персональная ссылка:\n`{ref_link}`\n\n"
-        f"👥 Приглашено: {count}\n\n"
+        "🎁 **Пригласи друга**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🔗 *Ваша персональная ссылка:*\n`{ref_link}`\n\n"
+        f"👥 Приглашено: *{count}*\n\n"
         "🎉 **Бонусы:**\n"
-        "• Друг получит **10 дней Premium**\n"
-        "• Вы получите **10 дней Premium** за каждого друга\n\n"
-        "Отправьте ссылку другу, и бонусы начислятся автоматически после его регистрации."
+        "▫️ Друг получит **10 дней Premium**\n"
+        "▫️ Вы получите **10 дней Premium** за каждого друга\n\n"
+        "_Отправьте ссылку другу, и бонусы начислятся автоматически после его регистрации._"
     )
     copy_button = InlineKeyboardButton(
         text="📋 Скопировать ссылку",
