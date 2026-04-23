@@ -1,6 +1,6 @@
 # bot.py
 # Главный файл запуска Telegram-бота «AI-психолог».
-# Версия 4.0.0 – модель подписки по времени, без запроса имени при старте.
+# Версия 4.1.1 – подписка по времени + глобальный счётчик сообщений ИИ (тестовый режим).
 
 import asyncio
 import os
@@ -36,6 +36,7 @@ console_handler.setLevel(logging.INFO)
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
+# Пишем логи в файл для последующего анализа
 file_handler = logging.FileHandler("bot_public.log", encoding="utf-8")
 file_handler.setLevel(logging.INFO)
 file_handler.setFormatter(formatter)
@@ -63,23 +64,24 @@ dp = Dispatcher()
 # -------------------------------------------------------------------
 @dp.errors()
 async def errors_handler(_: types.Update, exception: Exception):
+    """Ловит все необработанные исключения и логирует их."""
     logger.exception("Критическая ошибка при обработке обновления", exc_info=exception)
     return True
 
 
 # -------------------------------------------------------------------
-# ЕДИНАЯ ФУНКЦИЯ СПРАВКИ
+# ЕДИНАЯ ФУНКЦИЯ СПРАВКИ (иконки обновлены)
 # -------------------------------------------------------------------
 def get_help_text() -> str:
     return (
         "🤖 **• AI-психолог •**\n"
-        "Версия: **4.0.0**\n"
+        "Версия: **4.1.1**\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "*Виртуальный помощник для поддержки ментального благополучия на базе ИИ.*\n\n"
         "✨ **Что я умею:**\n"
         "💬 • *Начать сессию* — беседа с психологом (требуется подписка)\n"
-        "👤 • *Личный кабинет* — статус подписки, история тестов\n"
-        "🎁 • *Пригласи друга* — +10 дней подписки за каждого друга\n"
+        "🏠 • *Личный кабинет* — статус подписки, история тестов\n"
+        "💌 • *Пригласи друга* — +10 дней подписки за каждого друга\n"
         "🧠 • *Контекст диалога* — помню предыдущие беседы\n"
         "🆘 • *Кризис-детектор* — распознаю тревожные фразы\n\n"
         "🚧 **В планах:**\n"
@@ -100,9 +102,9 @@ async def cmd_start(message: types.Message, state: FSMContext, command: CommandO
     При старте:
       - Сохраняет профиль с именем из Telegram.
       - Обрабатывает реферальную ссылку.
-      - Активирует пробный период или реферальный бонус.
-      - Начисляет бонус пригласившему.
-      - Отправляет уведомление админам о юбилейных регистрациях.
+      - Активирует пробный период (5 дн.) или реферальный бонус (10 дн.).
+      - Начисляет бонус пригласившему (10 дн.).
+      - Отправляет уведомление админам по гибкой схеме.
       - Показывает главное меню.
     """
     await state.clear()
@@ -111,7 +113,7 @@ async def cmd_start(message: types.Message, state: FSMContext, command: CommandO
     telegram_name = message.from_user.full_name or message.from_user.first_name or "Без имени"
     username = message.from_user.username
 
-    # Сохраняем профиль (без custom_name, используем telegram_name как основное)
+    # Сохраняем профиль (без custom_name)
     await save_user_profile(user_id, telegram_name, None, username)
 
     # Обработка реферальной ссылки
@@ -149,14 +151,13 @@ async def cmd_start(message: types.Message, state: FSMContext, command: CommandO
     # --- УВЕДОМЛЕНИЕ АДМИНИСТРАТОРАМ (ГИБКАЯ СХЕМА) ---
     total_users = await get_total_users_count()
 
-    # Определяем, нужно ли уведомлять на этом порядковом номере
     notify = False
     if total_users <= 100:
-        notify = True  # каждый до 100
+        notify = True                     # каждый до 100
     elif total_users <= 500 and total_users % 5 == 0:
-        notify = True  # каждый 5-й до 500
+        notify = True                     # каждый 5-й до 500
     elif total_users % 10 == 0:
-        notify = True  # каждый 10-й после 500
+        notify = True                     # каждый 10-й после 500
 
     if notify:
         admin_ids_str = os.getenv("ADMIN_IDS", "")
@@ -164,7 +165,6 @@ async def cmd_start(message: types.Message, state: FSMContext, command: CommandO
             admin_ids = [int(uid.strip()) for uid in admin_ids_str.split(",") if uid.strip()]
             user_mention = f"@{username}" if username else telegram_name
 
-            # Тип бонуса
             if inviter_id is not None:
                 bonus_text = "🎁 +10 дней подписки (реферал)"
             else:
@@ -234,7 +234,7 @@ dp.include_router(admin_router)
 async def main():
     await init_db()
     logger.info("╔" + "═" * 53 + "╗")
-    logger.info("║" + " " * 17 + "🤖 AI-ПСИХОЛОГ v4.0.0 (подписка)" + " " * 17 + "║")
+    logger.info("║" + " " * 16 + "🤖 AI-ПСИХОЛОГ v4.1.1 (подписка)" + " " * 17 + "║")
     logger.info("╚" + "═" * 53 + "╝")
     logger.info("📡 СТАТУС СИСТЕМЫ:")
     logger.info("  ✅ Бот успешно запущен")
