@@ -301,7 +301,7 @@ async def user_info_callback(callback: types.CallbackQuery):
         f"Имя: *{safe_display_name}*\n"
         f"🚀 Регистрация: {reg_date}\n"
         f"💬 Всего сообщений: **{info['total_messages']}**\n"
-        f"💎 Подписка: {sub_status}\n"
+        f"⏳ Подписка: {sub_status}\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
     )
 

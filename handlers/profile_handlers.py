@@ -83,7 +83,7 @@ async def profile_main(message: types.Message, state: FSMContext):
         "👤 **Личный кабинет**\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"{test_line}\n\n"
-        f"💎 *Подписка:* {sub_text}\n"
+        f"⏳ *Подписка:* {sub_text}\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "Выберите действие:"
     )
@@ -164,7 +164,7 @@ async def profile_back_from_tests(callback: types.CallbackQuery):
         "👤 **Личный кабинет**\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"{test_line}\n\n"
-        f"💎 *Подписка:* {sub_text}\n"
+        f"⏳ *Подписка:* {sub_text}\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "Выберите действие:"
     )
