@@ -234,7 +234,7 @@ dp.include_router(admin_router)
 async def main():
     await init_db()
     logger.info("╔" + "═" * 53 + "╗")
-    logger.info("║" + " " * 16 + "🤖 AI-ПСИХОЛОГ v4.1.1 (подписка)" + " " * 17 + "║")
+    logger.info("║" + " " * 12 + "AI-ПСИХОЛОГ v4.1.1 (подписка)" + " " * 12 + "║")
     logger.info("╚" + "═" * 53 + "╝")
     logger.info("📡 СТАТУС СИСТЕМЫ:")
     logger.info("  ✅ Бот успешно запущен")
