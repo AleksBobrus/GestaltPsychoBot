@@ -146,25 +146,37 @@ async def cmd_start(message: types.Message, state: FSMContext, command: CommandO
             await mark_referral_bonus_given(user_id)
             logger.info(f"Бонусные 10 дней подписки начислены пригласившему {inviter_id} за {user_id}")
 
-    # --- УВЕДОМЛЕНИЕ АДМИНИСТРАТОРАМ О ЮБИЛЕЙНЫХ РЕГИСТРАЦИЯХ ---
+    # --- УВЕДОМЛЕНИЕ АДМИНИСТРАТОРАМ (ГИБКАЯ СХЕМА) ---
     total_users = await get_total_users_count()
+
+    # Определяем, нужно ли уведомлять на этом порядковом номере
     notify = False
-    if 1 <= total_users <= 5:
-        notify = True
-    elif total_users >= 10 and total_users % 10 == 0:
-        notify = True
+    if total_users <= 100:
+        notify = True  # каждый до 100
+    elif total_users <= 500 and total_users % 5 == 0:
+        notify = True  # каждый 5-й до 500
+    elif total_users % 10 == 0:
+        notify = True  # каждый 10-й после 500
 
     if notify:
         admin_ids_str = os.getenv("ADMIN_IDS", "")
         if admin_ids_str:
             admin_ids = [int(uid.strip()) for uid in admin_ids_str.split(",") if uid.strip()]
             user_mention = f"@{username}" if username else telegram_name
+
+            # Тип бонуса
+            if inviter_id is not None:
+                bonus_text = "🎁 +10 дней подписки (реферал)"
+            else:
+                bonus_text = "⭐ +5 дней пробного периода"
+
             message_text = (
                 f"🎉 Новый пользователь!\n"
                 f"Порядковый номер: {total_users}\n"
                 f"ID: {user_id}\n"
                 f"Имя: {telegram_name}\n"
-                f"Username: {user_mention}"
+                f"Username: {user_mention}\n"
+                f"Бонус: {bonus_text}"
             )
             for admin_id in admin_ids:
                 try:
