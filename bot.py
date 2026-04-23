@@ -17,7 +17,7 @@ from handlers.profile_handlers import router as profile_router
 from handlers.admin import router as admin_router
 from database import (
     init_db, save_user_profile,
-    activate_subscription, is_premium_active, get_subscription_days_left,
+    activate_subscription, is_premium_active,
     add_referral, has_pending_referral_bonus, mark_referral_bonus_given, get_inviter_id,
     get_total_users_count   # для уведомлений о юбилейных регистрациях
 )

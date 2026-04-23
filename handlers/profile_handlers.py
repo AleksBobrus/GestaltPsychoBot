@@ -136,7 +136,7 @@ async def profile_back_from_tests(callback: types.CallbackQuery):
 
     try:
         test_results = await get_user_bdi_results(user_id, limit=1)
-    except Exception:
+    except Exception:   # noqa
         test_results = []
 
     if test_results:
