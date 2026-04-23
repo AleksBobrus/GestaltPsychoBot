@@ -1,6 +1,6 @@
 # bot.py
 # Главный файл запуска Telegram-бота «AI-психолог».
-# Версия 4.0.0 – переход на модель подписки по времени (Premium).
+# Версия 4.0.0 – модель подписки по времени, без запроса имени при старте.
 
 import asyncio
 import os
@@ -9,8 +9,6 @@ from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import ReplyKeyboardRemove
 from keyboards import get_main_menu
 from handlers.dialog_handlers import register_dialog_handlers
 from handlers.profile_handlers import router as profile_router
@@ -19,7 +17,7 @@ from database import (
     init_db, save_user_profile,
     activate_subscription, is_premium_active,
     add_referral, has_pending_referral_bonus, mark_referral_bonus_given, get_inviter_id,
-    get_total_users_count   # для уведомлений о юбилейных регистрациях
+    get_total_users_count
 )
 
 # -------------------------------------------------------------------
@@ -70,17 +68,9 @@ async def errors_handler(_: types.Update, exception: Exception):
 
 
 # -------------------------------------------------------------------
-# FSM ДЛЯ ЗАПРОСА ИМЕНИ
-# -------------------------------------------------------------------
-class NameState(StatesGroup):
-    waiting_for_name = State()
-
-
-# -------------------------------------------------------------------
-# ЕДИНАЯ ФУНКЦИЯ СПРАВКИ (ОБНОВЛЕНО ДЛЯ ПОДПИСКИ)
+# ЕДИНАЯ ФУНКЦИЯ СПРАВКИ
 # -------------------------------------------------------------------
 def get_help_text() -> str:
-    """Возвращает текст с информацией о боте (версия 4.0.0)."""
     return (
         "🤖 **• AI-психолог •**\n"
         "Версия: **4.0.0**\n"
@@ -94,7 +84,7 @@ def get_help_text() -> str:
         "🆘 • *Кризис-детектор* — распознаю тревожные фразы\n\n"
         "🚧 **В планах:**\n"
         "📋 • Тест на уровень депрессии (шкала Бека)\n"
-        "🛒 • Покупка подписки\n\n"
+        "🛒 • Продление подписки\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         "⚠️ *Бот не заменяет профессионального психолога.*\n"
         "При серьёзных проблемах обратитесь к специалисту."
@@ -102,15 +92,18 @@ def get_help_text() -> str:
 
 
 # -------------------------------------------------------------------
-# ОБРАБОТЧИК КОМАНДЫ /start (СОХРАНЕНИЕ РЕФЕРАЛЬНОЙ СВЯЗИ)
+# ОБРАБОТЧИК КОМАНДЫ /start (БЕЗ ЗАПРОСА ИМЕНИ)
 # -------------------------------------------------------------------
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext, command: CommandObject):
     """
-    При первом запуске:
-      - Сохраняет базовый профиль (без имени).
-      - Если передан реферальный параметр ?start=ref123456, сохраняет связь.
-      - Запрашивает имя.
+    При старте:
+      - Сохраняет профиль с именем из Telegram.
+      - Обрабатывает реферальную ссылку.
+      - Активирует пробный период или реферальный бонус.
+      - Начисляет бонус пригласившему.
+      - Отправляет уведомление админам о юбилейных регистрациях.
+      - Показывает главное меню.
     """
     await state.clear()
 
@@ -118,10 +111,10 @@ async def cmd_start(message: types.Message, state: FSMContext, command: CommandO
     telegram_name = message.from_user.full_name or message.from_user.first_name or "Без имени"
     username = message.from_user.username
 
-    # Сохраняем профиль в таблицу users (пока без custom_name)
+    # Сохраняем профиль (без custom_name, используем telegram_name как основное)
     await save_user_profile(user_id, telegram_name, None, username)
 
-    # Обработка реферальной ссылки (только сохранение связи)
+    # Обработка реферальной ссылки
     args = command.args
     if args and args.startswith("ref"):
         try:
@@ -133,52 +126,17 @@ async def cmd_start(message: types.Message, state: FSMContext, command: CommandO
         except ValueError:
             pass
 
-    # Запрашиваем имя
-    await state.set_state(NameState.waiting_for_name)
-    await message.answer(
-        "👋 Добро пожаловать!\n\n"
-        "Как я могу к вам обращаться? Напишите ваше имя.",
-        reply_markup=ReplyKeyboardRemove()
-    )
-
-
-# -------------------------------------------------------------------
-# ОБРАБОТЧИК ВВОДА ИМЕНИ (АКТИВАЦИЯ ПОДПИСКИ И РЕФЕРАЛЬНЫХ БОНУСОВ)
-# -------------------------------------------------------------------
-@dp.message(NameState.waiting_for_name)
-async def process_name(message: types.Message, state: FSMContext):
-    """
-    После ввода имени:
-      - Обновляет custom_name.
-      - Активирует пробный период (5 дней) или реферальный бонус (10 дней).
-      - Начисляет реферальный бонус пригласившему (10 дней).
-      - Отправляет уведомление администраторам о юбилейных регистрациях.
-    """
-    user_name = message.text.strip()
-    if len(user_name) > 50:
-        await message.answer("⚠️ Имя слишком длинное. Пожалуйста, введите покороче.")
-        return
-
-    await state.update_data(user_name=user_name)
-
-    # Обновляем профиль (добавляем custom_name)
-    telegram_name = message.from_user.full_name or message.from_user.first_name or "Без имени"
-    username = message.from_user.username
-    await save_user_profile(message.from_user.id, telegram_name, user_name, username)
-
-    user_id = message.from_user.id
-
     # --- АКТИВАЦИЯ ПРОБНОГО ПЕРИОДА ИЛИ РЕФЕРАЛЬНОГО БОНУСА ---
     inviter_id = await get_inviter_id(user_id)
     if inviter_id is not None:
-        # Пользователь пришёл по реферальной ссылке – даём 10 дней (пробные 5 не даём)
+        # Пришёл по реферальной ссылке – получает 10 дней
         await activate_subscription(user_id, 10)
-        logger.info(f"10 дней Premium начислено приглашённому пользователю {user_id}")
+        logger.info(f"10 дней подписки начислено приглашённому пользователю {user_id}")
     else:
         # Обычная регистрация – пробные 5 дней, если подписка ещё не активна
         if not await is_premium_active(user_id):
             await activate_subscription(user_id, 5)
-            logger.info(f"Пробные 5 дней Premium активированы для пользователя {user_id}")
+            logger.info(f"Пробные 5 дней подписки активированы для пользователя {user_id}")
 
     # --- РЕФЕРАЛЬНЫЙ БОНУС ДЛЯ ПРИГЛАСИВШЕГО (10 дней) ---
     if await has_pending_referral_bonus(user_id):
@@ -186,7 +144,7 @@ async def process_name(message: types.Message, state: FSMContext):
         if inviter_id:
             await activate_subscription(inviter_id, 10)
             await mark_referral_bonus_given(user_id)
-            logger.info(f"Бонусные 10 дней Premium начислены пригласившему {inviter_id} за {user_id}")
+            logger.info(f"Бонусные 10 дней подписки начислены пригласившему {inviter_id} за {user_id}")
 
     # --- УВЕДОМЛЕНИЕ АДМИНИСТРАТОРАМ О ЮБИЛЕЙНЫХ РЕГИСТРАЦИЯХ ---
     total_users = await get_total_users_count()
@@ -200,12 +158,12 @@ async def process_name(message: types.Message, state: FSMContext):
         admin_ids_str = os.getenv("ADMIN_IDS", "")
         if admin_ids_str:
             admin_ids = [int(uid.strip()) for uid in admin_ids_str.split(",") if uid.strip()]
-            user_mention = f"@{username}" if username else user_name
+            user_mention = f"@{username}" if username else telegram_name
             message_text = (
                 f"🎉 Новый пользователь!\n"
                 f"Порядковый номер: {total_users}\n"
                 f"ID: {user_id}\n"
-                f"Имя: {user_name}\n"
+                f"Имя: {telegram_name}\n"
                 f"Username: {user_mention}"
             )
             for admin_id in admin_ids:
@@ -214,12 +172,11 @@ async def process_name(message: types.Message, state: FSMContext):
                 except Exception as e:
                     logger.warning(f"Не удалось отправить уведомление админу {admin_id}: {e}")
 
-    await state.clear()
-
+    # Приветствие и главное меню
     await message.answer(
-        f"👋 *Приятно познакомиться, {user_name}!*\n\n"
+        f"👋 *Привет, {telegram_name}!*\n\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"⚠️ **Важное предупреждение**\n"
+        f"⚠️ *Важное предупреждение*\n"
         f"• Я не заменяю профессионального психолога\n"
         f"• При серьёзных проблемах обратитесь к специалисту\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -264,10 +221,9 @@ dp.include_router(admin_router)
 # -------------------------------------------------------------------
 async def main():
     await init_db()
-    logger.info("База данных инициализирована")
-    logger.info("╔══════════════════════════════════════════════════════════╗")
-    logger.info("║ 🚧🚧        🤖 AI-ПСИХОЛОГ v4.0.0 (Premium)        🚧🚧 ║")
-    logger.info("╚══════════════════════════════════════════════════════════╝")
+    logger.info("╔" + "═" * 53 + "╗")
+    logger.info("║" + " " * 17 + "🤖 AI-ПСИХОЛОГ v4.0.0 (подписка)" + " " * 17 + "║")
+    logger.info("╚" + "═" * 53 + "╝")
     logger.info("📡 СТАТУС СИСТЕМЫ:")
     logger.info("  ✅ Бот успешно запущен")
     logger.info("  ✅ DeepSeek API подключен")
@@ -283,8 +239,8 @@ async def main():
     logger.info("  🔧 Админ-панель (управление пользователями, рассылка)")
     logger.info("🚧 В РАЗРАБОТКЕ:")
     logger.info("  📋 Тест на депрессию (шкала Бека)")
-    logger.info("  🛒 Покупка подписки")
-    logger.info("=" * 55)
+    logger.info("  🛒 Продление подписки")
+    logger.info("═" * 55)
     logger.info("⏳ Ожидание входящих сообщений...")
     await dp.start_polling(bot)
 
