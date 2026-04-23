@@ -1,6 +1,6 @@
 # handlers/admin.py
-# Модуль администрирования: статистика, пользователи (список, поиск по ID, инфо), рассылка.
-# Версия 4.0.0 – управление Premium-подписками вместо баланса сообщений.
+# Модуль администрирования: статистика, пользователи (список, поиск, инфо),
+# управление подписками, рассылка, сброс глобального счётчика ИИ (тестовый режим).
 
 import os
 import asyncio
@@ -17,7 +17,8 @@ from database import (
     get_user_info,
     get_all_users, get_total_users_count,
     search_users,
-    activate_subscription, deactivate_subscription, get_subscription_days_left
+    activate_subscription, deactivate_subscription, get_subscription_days_left,
+    reset_global_message_counter   # <-- новая функция сброса глобального счётчика
 )
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ def is_admin(user_id: int) -> bool:
 # СОБСТВЕННАЯ ФУНКЦИЯ ЭКРАНИРОВАНИЯ MARKDOWN
 # -------------------------------------------------------------------
 def escape_md(text: str) -> str:
-    """Экранирует спецсимволы Markdown."""
+    """Экранирует спецсимволы Markdown для безопасного отображения."""
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
@@ -45,11 +46,12 @@ def escape_md(text: str) -> str:
 # КЛАВИАТУРА АДМИН-ПАНЕЛИ (ГЛАВНОЕ МЕНЮ)
 # -------------------------------------------------------------------
 def get_admin_keyboard() -> InlineKeyboardMarkup:
-    """Главное меню админ-панели."""
+    """Главное меню админ-панели с кнопкой сброса глобального счётчика."""
     buttons = [
         [InlineKeyboardButton(text="📈 Подробная статистика", callback_data="admin_stats")],
         [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_users_menu")],
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
+        [InlineKeyboardButton(text="🔄 Сбросить глобальный счётчик", callback_data="admin_reset_global_ask")],
         [InlineKeyboardButton(text="🔙 Закрыть", callback_data="admin_close")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -59,10 +61,12 @@ def get_admin_keyboard() -> InlineKeyboardMarkup:
 # СОСТОЯНИЯ FSM
 # -------------------------------------------------------------------
 class BroadcastState(StatesGroup):
+    """Состояние для ввода текста рассылки."""
     waiting_for_message = State()
 
 
 class SearchState(StatesGroup):
+    """Состояние для ввода поискового запроса (только ID)."""
     waiting_for_query = State()
 
 
@@ -71,6 +75,7 @@ class SearchState(StatesGroup):
 # -------------------------------------------------------------------
 @router.message(F.text == "🔧 Админ-панель")
 async def admin_panel(message: types.Message, state: FSMContext):
+    """Открывает админ-панель с общей сводкой."""
     if not is_admin(message.from_user.id):
         await message.answer("⛔ У вас нет доступа к этой функции.")
         return
@@ -101,6 +106,7 @@ async def admin_panel(message: types.Message, state: FSMContext):
 # -------------------------------------------------------------------
 @router.callback_query(F.data == "admin_stats")
 async def admin_stats_callback(callback: types.CallbackQuery):
+    """Заглушка для подробной статистики."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -108,10 +114,58 @@ async def admin_stats_callback(callback: types.CallbackQuery):
 
 
 # -------------------------------------------------------------------
+# СБРОС ГЛОБАЛЬНОГО СЧЁТЧИКА (ЗАПРОС ПОДТВЕРЖДЕНИЯ И ВЫПОЛНЕНИЕ)
+# -------------------------------------------------------------------
+@router.callback_query(F.data == "admin_reset_global_ask")
+async def admin_reset_global_ask(callback: types.CallbackQuery):
+    """Запрашивает подтверждение на сброс глобального счётчика."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён.", show_alert=True)
+        return
+    await callback.answer()
+    await callback.message.edit_text(
+        "⚠️ *Вы уверены, что хотите сбросить глобальный счётчик сообщений ИИ?*",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Да, сбросить", callback_data="admin_reset_global_confirm"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data="admin_back_to_panel")
+            ]
+        ])
+    )
+
+
+@router.callback_query(F.data == "admin_reset_global_confirm")
+async def admin_reset_global_confirm(callback: types.CallbackQuery):
+    """Сбрасывает глобальный счётчик и возвращает в панель."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён.", show_alert=True)
+        return
+    await reset_global_message_counter()
+    await callback.answer("✅ Глобальный счётчик сброшен до 0", show_alert=True)
+    # Возвращаемся в главное меню админ-панели
+    await back_to_panel(callback)
+
+
+# -------------------------------------------------------------------
+# ПРЯМАЯ КОМАНДА /reset_counter
+# -------------------------------------------------------------------
+@router.message(Command("reset_counter"))
+async def cmd_reset_counter(message: types.Message):
+    """Админская команда для мгновенного сброса глобального счётчика."""
+    if not is_admin(message.from_user.id):
+        await message.answer("⛔ У вас нет доступа к этой команде.")
+        return
+    await reset_global_message_counter()
+    await message.answer("✅ Глобальный счётчик сообщений ИИ сброшен до 0.")
+
+
+# -------------------------------------------------------------------
 # РАЗДЕЛ «ПОЛЬЗОВАТЕЛИ» (СПИСОК В ВИДЕ КНОПОК)
 # -------------------------------------------------------------------
 @router.callback_query(F.data == "admin_users_menu")
 async def admin_users_menu(callback: types.CallbackQuery):
+    """Открывает список пользователей (страница 0)."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -120,6 +174,10 @@ async def admin_users_menu(callback: types.CallbackQuery):
 
 
 async def show_user_list(message: types.Message, page: int = 0):
+    """
+    Отображает страницу списка пользователей.
+    Каждый пользователь — отдельная кнопка с ID и именем (telegram_name).
+    """
     per_page = 10
     total_users = await get_total_users_count()
     offset = page * per_page
@@ -139,11 +197,12 @@ async def show_user_list(message: types.Message, page: int = 0):
     keyboard_rows = []
     for u in users:
         user_id = u['user_id']
-        name = u.get('custom_name') or u.get('telegram_name') or "Без имени"
+        name = u.get('telegram_name') or "Без имени"
         safe_name = escape_md(name)
         button_text = f"{user_id} – {safe_name}"
         keyboard_rows.append([InlineKeyboardButton(text=button_text, callback_data=f"user_info:{user_id}")])
 
+    # Кнопки пагинации
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"user_page:{page-1}"))
@@ -167,6 +226,7 @@ async def show_user_list(message: types.Message, page: int = 0):
 # -------------------------------------------------------------------
 @router.callback_query(F.data.startswith("user_page:"))
 async def user_page_callback(callback: types.CallbackQuery):
+    """Переход по страницам списка пользователей."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -180,6 +240,7 @@ async def user_page_callback(callback: types.CallbackQuery):
 # -------------------------------------------------------------------
 @router.callback_query(F.data == "admin_search_user")
 async def admin_search_user(callback: types.CallbackQuery, state: FSMContext):
+    """Запускает режим поиска пользователя по ID."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -196,6 +257,7 @@ async def admin_search_user(callback: types.CallbackQuery, state: FSMContext):
 
 @router.message(SearchState.waiting_for_query)
 async def process_search(message: types.Message, state: FSMContext):
+    """Выполняет поиск по ID и показывает результаты в виде кнопок."""
     if not is_admin(message.from_user.id):
         await message.answer("⛔ Доступ запрещён.")
         await state.clear()
@@ -221,7 +283,7 @@ async def process_search(message: types.Message, state: FSMContext):
         keyboard_rows = []
         for u in users:
             user_id = u['user_id']
-            name = u.get('custom_name') or u.get('telegram_name') or "Без имени"
+            name = u.get('telegram_name') or "Без имени"
             safe_name = escape_md(name)
             button_text = f"{user_id} – {safe_name}"
             keyboard_rows.append([InlineKeyboardButton(text=button_text, callback_data=f"user_info:{user_id}")])
@@ -233,6 +295,7 @@ async def process_search(message: types.Message, state: FSMContext):
 
 
 async def show_user_list_new_message(message: types.Message, page: int = 0):
+    """Отправляет новое сообщение со списком пользователей (используется при отмене поиска)."""
     per_page = 10
     total_users = await get_total_users_count()
     offset = page * per_page
@@ -252,7 +315,7 @@ async def show_user_list_new_message(message: types.Message, page: int = 0):
     keyboard_rows = []
     for u in users:
         user_id = u['user_id']
-        name = u.get('custom_name') or u.get('telegram_name') or "Без имени"
+        name = u.get('telegram_name') or "Без имени"
         safe_name = escape_md(name)
         button_text = f"{user_id} – {safe_name}"
         keyboard_rows.append([InlineKeyboardButton(text=button_text, callback_data=f"user_info:{user_id}")])
@@ -273,10 +336,11 @@ async def show_user_list_new_message(message: types.Message, page: int = 0):
 
 
 # -------------------------------------------------------------------
-# ИНФОРМАЦИЯ О ПОЛЬЗОВАТЕЛЕ (С УПРАВЛЕНИЕМ PREMIUM)
+# ИНФОРМАЦИЯ О ПОЛЬЗОВАТЕЛЕ (С УПРАВЛЕНИЕМ ПОДПИСКОЙ)
 # -------------------------------------------------------------------
 @router.callback_query(F.data.startswith("user_info:"))
 async def user_info_callback(callback: types.CallbackQuery):
+    """Показывает подробную информацию о пользователе с кнопками управления подпиской."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -284,7 +348,7 @@ async def user_info_callback(callback: types.CallbackQuery):
     user_id = int(callback.data.split(":")[1])
     info = await get_user_info(user_id)
 
-    display_name = info.get('custom_name') or info.get('telegram_name') or "Без имени"
+    display_name = info.get('telegram_name') or "Без имени"
     safe_display_name = escape_md(display_name)
 
     reg_date = info.get('created_at')[:19] if info.get('created_at') else "неизвестно"
@@ -321,10 +385,11 @@ async def user_info_callback(callback: types.CallbackQuery):
 
 
 # -------------------------------------------------------------------
-# АКТИВАЦИЯ PREMIUM (ЗАПРОС ПОДТВЕРЖДЕНИЯ)
+# АКТИВАЦИЯ ПОДПИСКИ (ЗАПРОС ПОДТВЕРЖДЕНИЯ)
 # -------------------------------------------------------------------
 @router.callback_query(F.data.startswith("user_add_premium_ask:"))
 async def user_add_premium_ask(callback: types.CallbackQuery):
+    """Запрашивает подтверждение на активацию подписки."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -346,6 +411,7 @@ async def user_add_premium_ask(callback: types.CallbackQuery):
 
 @router.callback_query(F.data.startswith("user_add_premium_confirm:"))
 async def user_add_premium_confirm(callback: types.CallbackQuery):
+    """Активирует подписку и возвращает информацию о пользователе."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -358,10 +424,11 @@ async def user_add_premium_confirm(callback: types.CallbackQuery):
 
 
 # -------------------------------------------------------------------
-# ДЕАКТИВАЦИЯ PREMIUM
+# ДЕАКТИВАЦИЯ ПОДПИСКИ
 # -------------------------------------------------------------------
 @router.callback_query(F.data.startswith("user_deactivate_premium_ask:"))
 async def user_deactivate_premium_ask(callback: types.CallbackQuery):
+    """Запрашивает подтверждение на отключение подписки."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -381,6 +448,7 @@ async def user_deactivate_premium_ask(callback: types.CallbackQuery):
 
 @router.callback_query(F.data.startswith("user_deactivate_premium_confirm:"))
 async def user_deactivate_premium_confirm(callback: types.CallbackQuery):
+    """Отключает подписку и возвращает информацию о пользователе."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -395,6 +463,7 @@ async def user_deactivate_premium_confirm(callback: types.CallbackQuery):
 # -------------------------------------------------------------------
 @router.callback_query(F.data == "admin_broadcast")
 async def admin_broadcast_callback(callback: types.CallbackQuery, state: FSMContext):
+    """Запускает режим рассылки."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -403,7 +472,7 @@ async def admin_broadcast_callback(callback: types.CallbackQuery, state: FSMCont
     await state.set_state(BroadcastState.waiting_for_message)
     await callback.message.edit_text(
         "📢 **Режим рассылки**\n\n"
-        "Отправьте сообщение, которое хотите разослать всем пользователям.\n"
+        "Отправьте сообщение, которое хотите разослать всем зарегистрированным пользователям.\n"
         "Для отмены отправьте /cancel",
         parse_mode="Markdown"
     )
@@ -411,6 +480,7 @@ async def admin_broadcast_callback(callback: types.CallbackQuery, state: FSMCont
 
 @router.message(BroadcastState.waiting_for_message)
 async def process_broadcast(message: types.Message, state: FSMContext, bot: Bot):
+    """Рассылает сообщение всем зарегистрированным пользователям."""
     if not is_admin(message.from_user.id):
         await message.answer("⛔ Доступ запрещён.")
         await state.clear()
@@ -460,6 +530,7 @@ async def process_broadcast(message: types.Message, state: FSMContext, bot: Bot)
 # -------------------------------------------------------------------
 @router.callback_query(F.data == "admin_back_to_panel")
 async def back_to_panel(callback: types.CallbackQuery):
+    """Возвращает в главное меню админ-панели с обновлённой сводкой."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -472,7 +543,8 @@ async def back_to_panel(callback: types.CallbackQuery):
     purchases_today = 0
 
     stats_text = (
-        "🔧 **Админ-панель**\n\n"
+        "🔧 **Админ-панель**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "📊 **Сводка на сегодня:**\n"
         f"👥 Всего пользователей: **{total_users}**\n"
         f"📅 Активных сегодня: **{active_today}**\n"
@@ -490,6 +562,7 @@ async def back_to_panel(callback: types.CallbackQuery):
 
 @router.callback_query(F.data == "admin_close")
 async def admin_close_callback(callback: types.CallbackQuery):
+    """Закрывает админ-панель (удаляет сообщение)."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -502,6 +575,7 @@ async def admin_close_callback(callback: types.CallbackQuery):
 # -------------------------------------------------------------------
 @router.message(Command("stats"))
 async def cmd_stats(message: types.Message):
+    """Показывает статистику по команде /stats."""
     if not is_admin(message.from_user.id):
         await message.answer("⛔ У вас нет доступа к этой команде.")
         return
@@ -521,6 +595,7 @@ async def cmd_stats(message: types.Message):
 
 @router.message(Command("broadcast"))
 async def cmd_broadcast(message: types.Message, state: FSMContext):
+    """Запускает рассылку по команде /broadcast."""
     if not is_admin(message.from_user.id):
         await message.answer("⛔ У вас нет доступа к этой команде.")
         return
@@ -535,6 +610,7 @@ async def cmd_broadcast(message: types.Message, state: FSMContext):
 
 @router.message(Command("users"))
 async def cmd_users(message: types.Message):
+    """Показывает последних 20 пользователей по команде /users."""
     if not is_admin(message.from_user.id):
         await message.answer("⛔ У вас нет доступа.")
         return
@@ -546,7 +622,17 @@ async def cmd_users(message: types.Message):
 
     lines = ["👥 **Последние 20 пользователей:**\n"]
     for u in users:
-        name = u.get('custom_name') or u.get('telegram_name') or "Без имени"
+        name = u.get('telegram_name') or "Без имени"
         lines.append(f"`{u['user_id']}` – {name}")
 
     await message.answer("\n".join(lines), parse_mode="Markdown")
+
+
+@router.message(Command("reset_counter"))
+async def cmd_reset_counter(message: types.Message):
+    """Админская команда для мгновенного сброса глобального счётчика."""
+    if not is_admin(message.from_user.id):
+        await message.answer("⛔ У вас нет доступа к этой команде.")
+        return
+    await reset_global_message_counter()
+    await message.answer("✅ Глобальный счётчик сообщений ИИ сброшен до 0.")
