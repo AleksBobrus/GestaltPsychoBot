@@ -1,23 +1,25 @@
 # handlers/profile_handlers.py
-# Личный кабинет пользователя: баланс сообщений, история тестов, приглашение друга, покупки.
-# Добавлен подсчёт сессий.
+# Личный кабинет пользователя: статус Premium-подписки, история тестов, приглашение друга, покупка.
+# Версия 4.0.0 – отображение дней подписки вместо баланса сообщений.
 
 import logging
 from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CopyTextButton
 from keyboards import get_main_menu
 from database import (
-    get_user_info, get_user_bdi_results, get_balance,
-    get_referral_count, get_total_sessions
+    get_user_info, get_user_bdi_results,
+    get_referral_count, get_subscription_days_left
 )
-from aiogram.types import CopyTextButton
 
 logger = logging.getLogger(__name__)
 router = Router()
 
 
 def get_profile_keyboard() -> InlineKeyboardMarkup:
+    """
+    Инлайн-клавиатура для главного экрана личного кабинета.
+    """
     buttons = [
         [InlineKeyboardButton(text="📜 История тестов", callback_data="profile_tests")],
         [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="profile_invite")],
@@ -28,6 +30,9 @@ def get_profile_keyboard() -> InlineKeyboardMarkup:
 
 
 def get_tests_keyboard() -> InlineKeyboardMarkup:
+    """
+    Инлайн-клавиатура для раздела истории тестов.
+    """
     buttons = [
         [InlineKeyboardButton(text="📋 Пройти тест", callback_data="profile_start_test")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="profile_back_from_tests")]
@@ -35,8 +40,15 @@ def get_tests_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+# -------------------------------------------------------------------
+# ТОЧКА ВХОДА: КНОПКА «👤 ЛИЧНЫЙ КАБИНЕТ»
+# -------------------------------------------------------------------
 @router.message(F.text == "👤 Личный кабинет")
 async def profile_main(message: types.Message, state: FSMContext):
+    """
+    Открывает главное меню личного кабинета.
+    Отображает статус Premium-подписки и оставшиеся дни.
+    """
     await state.clear()
     user_id = message.from_user.id
 
@@ -60,22 +72,29 @@ async def profile_main(message: types.Message, state: FSMContext):
     else:
         test_line = "📋 Тест Бека: не пройден"
 
-    balance = await get_balance(user_id)
-    total_sessions = await get_total_sessions(user_id)
+    # Получаем статус Premium-подписки
+    days_left = await get_subscription_days_left(user_id)
+    if days_left is not None:
+        sub_text = f"✅ Активна (осталось {days_left} дн.)"
+    else:
+        sub_text = "❌ Не активна"
 
     text = (
         "👤 **Личный кабинет**\n\n"
         f"{test_line}\n"
-        f"📅 Всего сессий: {total_sessions}\n"
-        f"💰 Баланс: {balance} сообщ.\n\n"
+        f"💎 Подписка: {sub_text}\n\n"
         "Выберите действие:"
     )
 
     await message.answer(text, parse_mode="Markdown", reply_markup=get_profile_keyboard())
 
 
+# -------------------------------------------------------------------
+# ОБРАБОТЧИКИ ИНЛАЙН-КНОПОК ЛИЧНОГО КАБИНЕТА
+# -------------------------------------------------------------------
 @router.callback_query(F.data == "profile_tests")
 async def profile_tests(callback: types.CallbackQuery):
+    """Показывает историю пройденных тестов Бека."""
     user_id = callback.from_user.id
 
     try:
@@ -101,11 +120,13 @@ async def profile_tests(callback: types.CallbackQuery):
 
 @router.callback_query(F.data == "profile_start_test")
 async def profile_start_test(callback: types.CallbackQuery):
+    """Заглушка для запуска теста Бека."""
     await callback.answer("📋 Функция прохождения теста появится в ближайшее время.", show_alert=True)
 
 
 @router.callback_query(F.data == "profile_back_from_tests")
 async def profile_back_from_tests(callback: types.CallbackQuery):
+    """Возвращает из истории тестов в главное меню личного кабинета."""
     user_id = callback.from_user.id
     info = await get_user_info(user_id)
 
@@ -124,14 +145,16 @@ async def profile_back_from_tests(callback: types.CallbackQuery):
     else:
         test_line = "📋 Тест Бека: не пройден"
 
-    balance = await get_balance(user_id)
-    total_sessions = await get_total_sessions(user_id)
+    days_left = await get_subscription_days_left(user_id)
+    if days_left is not None:
+        sub_text = f"✅ Активна (осталось {days_left} дн.)"
+    else:
+        sub_text = "❌ Не активна"
 
     text = (
         "👤 **Личный кабинет**\n\n"
         f"{test_line}\n"
-        f"📅 Всего сессий: {total_sessions}\n"
-        f"💰 Баланс: {balance} сообщ.\n\n"
+        f"💎 Подписка: {sub_text}\n\n"
         "Выберите действие:"
     )
 
@@ -139,6 +162,9 @@ async def profile_back_from_tests(callback: types.CallbackQuery):
     await callback.answer()
 
 
+# -------------------------------------------------------------------
+# КНОПКА «ПРИГЛАСИТЬ ДРУГА»
+# -------------------------------------------------------------------
 @router.callback_query(F.data == "profile_invite")
 async def profile_invite(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -151,14 +177,13 @@ async def profile_invite(callback: types.CallbackQuery):
         f"Ваша персональная ссылка:\n`{ref_link}`\n\n"
         f"👥 Приглашено: {count}\n\n"
         "🎉 **Бонусы:**\n"
-        "• Друг получит **100 сообщений**\n"
-        "• Вы получите **100 сообщений** за каждого друга\n\n"
+        "• Друг получит **10 дней Premium**\n"
+        "• Вы получите **10 дней Premium** за каждого друга\n\n"
         "Отправьте ссылку другу, и бонусы начислятся автоматически после его регистрации."
     )
-    # Создаём кнопку копирования через объект CopyTextButton
     copy_button = InlineKeyboardButton(
         text="📋 Скопировать ссылку",
-        copy_text=CopyTextButton(text=ref_link)   # <-- правильный синтаксис
+        copy_text=CopyTextButton(text=ref_link)
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [copy_button],
@@ -168,9 +193,12 @@ async def profile_invite(callback: types.CallbackQuery):
     await callback.answer()
 
 
+# -------------------------------------------------------------------
+# ЗАГЛУШКИ ОСТАЛЬНЫХ КНОПОК
+# -------------------------------------------------------------------
 @router.callback_query(F.data == "profile_purchases")
 async def profile_purchases(callback: types.CallbackQuery):
-    await callback.answer("🛒 Возможность покупки сообщений появится в будущем.", show_alert=True)
+    await callback.answer("🛒 Возможность покупки Premium появится в будущем.", show_alert=True)
 
 
 @router.callback_query(F.data == "profile_back_to_main")

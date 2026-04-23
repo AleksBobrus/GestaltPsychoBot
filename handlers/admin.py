@@ -1,7 +1,6 @@
 # handlers/admin.py
 # Модуль администрирования: статистика, пользователи (список, поиск по ID, инфо), рассылка.
-# Кнопка сброса лимита заменена на добавление 20 сообщений на баланс.
-# Информация о пользователе теперь отображает баланс.
+# Версия 4.0.0 – управление Premium-подписками вместо баланса сообщений.
 
 import os
 import asyncio
@@ -18,8 +17,7 @@ from database import (
     get_user_info,
     get_all_users, get_total_users_count,
     search_users,
-    add_balance,            # <-- новая функция для пополнения баланса
-    get_balance             # <-- для отображения баланса
+    activate_subscription, deactivate_subscription, get_subscription_days_left
 )
 
 logger = logging.getLogger(__name__)
@@ -38,7 +36,7 @@ def is_admin(user_id: int) -> bool:
 # СОБСТВЕННАЯ ФУНКЦИЯ ЭКРАНИРОВАНИЯ MARKDOWN
 # -------------------------------------------------------------------
 def escape_md(text: str) -> str:
-    """Экранирует спецсимволы Markdown: _ * [ ] ( ) ~ ` > # + - = | { } . !"""
+    """Экранирует спецсимволы Markdown."""
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
@@ -61,12 +59,10 @@ def get_admin_keyboard() -> InlineKeyboardMarkup:
 # СОСТОЯНИЯ FSM
 # -------------------------------------------------------------------
 class BroadcastState(StatesGroup):
-    """Состояние для ввода текста рассылки."""
     waiting_for_message = State()
 
 
 class SearchState(StatesGroup):
-    """Состояние для ввода поискового запроса (только ID)."""
     waiting_for_query = State()
 
 
@@ -75,7 +71,6 @@ class SearchState(StatesGroup):
 # -------------------------------------------------------------------
 @router.message(F.text == "🔧 Админ-панель")
 async def admin_panel(message: types.Message, state: FSMContext):
-    """Открывает админ-панель с общей сводкой."""
     if not is_admin(message.from_user.id):
         await message.answer("⛔ У вас нет доступа к этой функции.")
         return
@@ -105,7 +100,6 @@ async def admin_panel(message: types.Message, state: FSMContext):
 # -------------------------------------------------------------------
 @router.callback_query(F.data == "admin_stats")
 async def admin_stats_callback(callback: types.CallbackQuery):
-    """Заглушка для подробной статистики."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -117,7 +111,6 @@ async def admin_stats_callback(callback: types.CallbackQuery):
 # -------------------------------------------------------------------
 @router.callback_query(F.data == "admin_users_menu")
 async def admin_users_menu(callback: types.CallbackQuery):
-    """Открывает список пользователей (страница 0)."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -126,10 +119,6 @@ async def admin_users_menu(callback: types.CallbackQuery):
 
 
 async def show_user_list(message: types.Message, page: int = 0):
-    """
-    Отображает страницу списка пользователей.
-    Каждый пользователь — отдельная кнопка с ID и именем (custom_name или telegram_name).
-    """
     per_page = 10
     total_users = await get_total_users_count()
     offset = page * per_page
@@ -177,7 +166,6 @@ async def show_user_list(message: types.Message, page: int = 0):
 # -------------------------------------------------------------------
 @router.callback_query(F.data.startswith("user_page:"))
 async def user_page_callback(callback: types.CallbackQuery):
-    """Переход по страницам списка пользователей."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -191,7 +179,6 @@ async def user_page_callback(callback: types.CallbackQuery):
 # -------------------------------------------------------------------
 @router.callback_query(F.data == "admin_search_user")
 async def admin_search_user(callback: types.CallbackQuery, state: FSMContext):
-    """Запускает режим поиска пользователя по ID."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -208,7 +195,6 @@ async def admin_search_user(callback: types.CallbackQuery, state: FSMContext):
 
 @router.message(SearchState.waiting_for_query)
 async def process_search(message: types.Message, state: FSMContext):
-    """Выполняет поиск по ID и показывает результаты в виде кнопок."""
     if not is_admin(message.from_user.id):
         await message.answer("⛔ Доступ запрещён.")
         await state.clear()
@@ -246,7 +232,6 @@ async def process_search(message: types.Message, state: FSMContext):
 
 
 async def show_user_list_new_message(message: types.Message, page: int = 0):
-    """Отправляет новое сообщение со списком пользователей (используется при отмене поиска)."""
     per_page = 10
     total_users = await get_total_users_count()
     offset = page * per_page
@@ -287,34 +272,39 @@ async def show_user_list_new_message(message: types.Message, page: int = 0):
 
 
 # -------------------------------------------------------------------
-# ИНФОРМАЦИЯ О ПОЛЬЗОВАТЕЛЕ (ОБНОВЛЁННАЯ – ПОКАЗЫВАЕТ БАЛАНС)
+# ИНФОРМАЦИЯ О ПОЛЬЗОВАТЕЛЕ (С УПРАВЛЕНИЕМ PREMIUM)
 # -------------------------------------------------------------------
 @router.callback_query(F.data.startswith("user_info:"))
 async def user_info_callback(callback: types.CallbackQuery):
-    """Показывает подробную информацию о пользователе с кнопками действий."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
 
     user_id = int(callback.data.split(":")[1])
     info = await get_user_info(user_id)
-    balance = await get_balance(user_id)
 
     display_name = info.get('custom_name') or info.get('telegram_name') or "Без имени"
     safe_display_name = escape_md(display_name)
 
     reg_date = info.get('created_at')[:19] if info.get('created_at') else "неизвестно"
+    days_left = await get_subscription_days_left(user_id)
+    if days_left is not None:
+        sub_status = f"✅ Активна (осталось {days_left} дн.)"
+    else:
+        sub_status = "❌ Не активна"
 
     text = (
         f"👤 Информация о пользователе {user_id} – {safe_display_name}\n\n"
         f"🚀 Регистрация: {reg_date}\n"
         f"💬 Всего сообщений: {info['total_messages']}\n"
-        f"💰 Баланс: {balance} сообщ.\n\n"
+        f"💎 Подписка: {sub_status}\n\n"
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Добавить 20 сообщений", callback_data=f"user_add_balance_ask:{user_id}")],
-        [InlineKeyboardButton(text="🎁 +100 подарочных сообщений", callback_data=f"user_gift:{user_id}")],
+        [InlineKeyboardButton(text="🔄 Активировать на 10 дней", callback_data=f"user_add_premium_ask:{user_id}:10")],
+        [InlineKeyboardButton(text="🔄 Активировать на 20 дней", callback_data=f"user_add_premium_ask:{user_id}:20")],
+        [InlineKeyboardButton(text="🔄 Активировать на 30 дней", callback_data=f"user_add_premium_ask:{user_id}:30")],
+        [InlineKeyboardButton(text="🚫 Отключить Premium", callback_data=f"user_deactivate_premium_ask:{user_id}")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_users_menu")]
     ])
 
@@ -326,67 +316,78 @@ async def user_info_callback(callback: types.CallbackQuery):
 
 
 # -------------------------------------------------------------------
-# ПОДТВЕРЖДЕНИЕ ДОБАВЛЕНИЯ 20 СООБЩЕНИЙ
+# АКТИВАЦИЯ PREMIUM (ЗАПРОС ПОДТВЕРЖДЕНИЯ)
 # -------------------------------------------------------------------
-@router.callback_query(F.data.startswith("user_add_balance_ask:"))
-async def user_add_balance_ask_callback(callback: types.CallbackQuery):
-    """Запрашивает подтверждение добавления 20 сообщений."""
+@router.callback_query(F.data.startswith("user_add_premium_ask:"))
+async def user_add_premium_ask(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
-
-    user_id = int(callback.data.split(":")[1])
+    _, user_id_str, days_str = callback.data.split(":")
+    user_id = int(user_id_str)
+    days = int(days_str)
     await callback.answer()
     await callback.message.edit_text(
-        f"⚠️ Вы уверены, что хотите добавить 20 сообщений пользователю {user_id}?",
+        f"⚠️ Активировать Premium на {days} дней для пользователя {user_id}?",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Да", callback_data=f"user_add_balance_confirm:{user_id}"),
+                InlineKeyboardButton(text="✅ Да", callback_data=f"user_add_premium_confirm:{user_id}:{days}"),
                 InlineKeyboardButton(text="❌ Нет", callback_data=f"user_info:{user_id}")
             ]
         ])
     )
 
 
-@router.callback_query(F.data.startswith("user_add_balance_confirm:"))
-async def user_add_balance_confirm_callback(callback: types.CallbackQuery):
-    """Добавляет 20 сообщений на баланс и уведомляет пользователя."""
+@router.callback_query(F.data.startswith("user_add_premium_confirm:"))
+async def user_add_premium_confirm(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
-
-    user_id = int(callback.data.split(":")[1])
-    await add_balance(user_id, 20)
-    await callback.answer("✅ 20 сообщений добавлено", show_alert=True)
-
-    # Отправляем уведомление пользователю
-    try:
-        await callback.bot.send_message(user_id, "💰 Ваш баланс пополнен на +20 сообщений!")
-    except Exception as e:
-        logger.warning(f"Не удалось отправить уведомление пользователю {user_id}: {e}")
-
-    # Обновляем информацию о пользователе в админ-панели
+    _, user_id_str, days_str = callback.data.split(":")
+    user_id = int(user_id_str)
+    days = int(days_str)
+    await activate_subscription(user_id, days)
+    await callback.answer(f"✅ Premium активирован на {days} дней", show_alert=True)
     await user_info_callback(callback)
 
 
 # -------------------------------------------------------------------
-# ЗАГЛУШКА ДЛЯ ПОДАРОЧНЫХ СООБЩЕНИЙ
+# ДЕАКТИВАЦИЯ PREMIUM
 # -------------------------------------------------------------------
-@router.callback_query(F.data.startswith("user_gift:"))
-async def user_gift_callback(callback: types.CallbackQuery):
-    """Заглушка для добавления подарочных сообщений."""
+@router.callback_query(F.data.startswith("user_deactivate_premium_ask:"))
+async def user_deactivate_premium_ask(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
-    await callback.answer("🎁 Функция в разработке", show_alert=True)
+    user_id = int(callback.data.split(":")[1])
+    await callback.answer()
+    await callback.message.edit_text(
+        f"⚠️ Отключить Premium для пользователя {user_id}?",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Да", callback_data=f"user_deactivate_premium_confirm:{user_id}"),
+                InlineKeyboardButton(text="❌ Нет", callback_data=f"user_info:{user_id}")
+            ]
+        ])
+    )
+
+
+@router.callback_query(F.data.startswith("user_deactivate_premium_confirm:"))
+async def user_deactivate_premium_confirm(callback: types.CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("⛔ Доступ запрещён.", show_alert=True)
+        return
+    user_id = int(callback.data.split(":")[1])
+    await deactivate_subscription(user_id)
+    await callback.answer("✅ Premium отключён", show_alert=True)
+    await user_info_callback(callback)
 
 
 # -------------------------------------------------------------------
-# РАССЫЛКА (без изменений)
+# РАССЫЛКА
 # -------------------------------------------------------------------
 @router.callback_query(F.data == "admin_broadcast")
 async def admin_broadcast_callback(callback: types.CallbackQuery, state: FSMContext):
-    """Запускает режим рассылки."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -403,7 +404,6 @@ async def admin_broadcast_callback(callback: types.CallbackQuery, state: FSMCont
 
 @router.message(BroadcastState.waiting_for_message)
 async def process_broadcast(message: types.Message, state: FSMContext, bot: Bot):
-    """Рассылает сообщение всем зарегистрированным пользователям."""
     if not is_admin(message.from_user.id):
         await message.answer("⛔ Доступ запрещён.")
         await state.clear()
@@ -453,7 +453,6 @@ async def process_broadcast(message: types.Message, state: FSMContext, bot: Bot)
 # -------------------------------------------------------------------
 @router.callback_query(F.data == "admin_back_to_panel")
 async def back_to_panel(callback: types.CallbackQuery):
-    """Возвращает в главное меню админ-панели с обновлённой сводкой."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -484,7 +483,6 @@ async def back_to_panel(callback: types.CallbackQuery):
 
 @router.callback_query(F.data == "admin_close")
 async def admin_close_callback(callback: types.CallbackQuery):
-    """Закрывает админ-панель (удаляет сообщение)."""
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
@@ -497,7 +495,6 @@ async def admin_close_callback(callback: types.CallbackQuery):
 # -------------------------------------------------------------------
 @router.message(Command("stats"))
 async def cmd_stats(message: types.Message):
-    """Показывает статистику по команде /stats."""
     if not is_admin(message.from_user.id):
         await message.answer("⛔ У вас нет доступа к этой команде.")
         return
@@ -517,7 +514,6 @@ async def cmd_stats(message: types.Message):
 
 @router.message(Command("broadcast"))
 async def cmd_broadcast(message: types.Message, state: FSMContext):
-    """Запускает рассылку по команде /broadcast."""
     if not is_admin(message.from_user.id):
         await message.answer("⛔ У вас нет доступа к этой команде.")
         return
@@ -532,7 +528,6 @@ async def cmd_broadcast(message: types.Message, state: FSMContext):
 
 @router.message(Command("users"))
 async def cmd_users(message: types.Message):
-    """Показывает последних 20 пользователей по команде /users."""
     if not is_admin(message.from_user.id):
         await message.answer("⛔ У вас нет доступа.")
         return

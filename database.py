@@ -1,10 +1,9 @@
 # database.py
 # Асинхронный модуль для работы с SQLite (aiosqlite).
-# Хранит историю диалогов, тест Бека, баланс сообщений, суммаризации, профили,
-# рефералы, сессии и глобальный счётчик сообщений ИИ.
+# Хранит историю диалогов, тест Бека, суммаризации, профили, рефералы, сессии и подписки.
 
 import aiosqlite
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import List, Dict, Tuple
 
 DB_NAME = "dialog_history.db"
@@ -14,9 +13,8 @@ DB_NAME = "dialog_history.db"
 # -------------------------------------------------------------------
 async def init_db() -> None:
     """
-    Создаёт все необходимые таблицы, если их нет, и выполняет миграции
-    (добавление столбцов, переименование) для обновления старых баз.
-    Вызывается один раз при старте бота.
+    Создаёт все необходимые таблицы, если их нет.
+    Старые таблицы message_limits и global_stats больше не используются.
     """
     async with aiosqlite.connect(DB_NAME) as conn:
         # Таблица истории диалогов
@@ -42,22 +40,6 @@ async def init_db() -> None:
             )
         """)
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_bdi_user_id ON bdi_results(user_id)")
-
-        # Таблица баланса сообщений (ранее называлась message_limits)
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS message_limits (
-                user_id INTEGER PRIMARY KEY,
-                balance INTEGER DEFAULT 0
-            )
-        """)
-
-        # МИГРАЦИЯ: если существует столбец daily_count, переименовываем в balance
-        cursor = await conn.execute("PRAGMA table_info(message_limits)")
-        columns = await cursor.fetchall()
-        column_names = [col[1] for col in columns]
-        if 'daily_count' in column_names:
-            await conn.execute("ALTER TABLE message_limits RENAME COLUMN daily_count TO balance")
-            print("[MIGRATION] Столбец 'daily_count' переименован в 'balance'")
 
         # Таблица суммаризаций
         await conn.execute("""
@@ -103,7 +85,7 @@ async def init_db() -> None:
             )
         """)
 
-        # Таблица сессий (подсчёт количества диалогов)
+        # Таблица сессий (подсчёт количества диалогов) – пока оставляем, но в ЛК уберём
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,11 +96,12 @@ async def init_db() -> None:
             )
         """)
 
-        # Таблица глобального счётчика сообщений ИИ (для лимита 500)
+        # НОВАЯ ТАБЛИЦА: подписки
         await conn.execute("""
-            CREATE TABLE IF NOT EXISTS global_stats (
-                key TEXT PRIMARY KEY,
-                value INTEGER
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                user_id INTEGER PRIMARY KEY,
+                is_premium BOOLEAN DEFAULT 0,
+                expires_at TIMESTAMP
             )
         """)
 
@@ -126,10 +109,9 @@ async def init_db() -> None:
 
 
 # -------------------------------------------------------------------
-# ИСТОРИЯ ДИАЛОГОВ
+# ИСТОРИЯ ДИАЛОГОВ (без изменений)
 # -------------------------------------------------------------------
 async def save_message(user_id: int, role: str, content: str) -> None:
-    """Асинхронно сохраняет одно сообщение (от пользователя или ассистента)."""
     async with aiosqlite.connect(DB_NAME) as conn:
         await conn.execute("""
             INSERT INTO chat_history (user_id, role, content, timestamp)
@@ -139,11 +121,6 @@ async def save_message(user_id: int, role: str, content: str) -> None:
 
 
 async def get_recent_history(user_id: int, limit: int = 20) -> List[Dict[str, str]]:
-    """
-    Возвращает последние `limit` сообщений пользователя.
-    Результат: список словарей [{"role": "user", "content": "..."}, ...]
-    в хронологическом порядке (старые → новые).
-    """
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("""
             SELECT role, content FROM chat_history
@@ -155,17 +132,15 @@ async def get_recent_history(user_id: int, limit: int = 20) -> List[Dict[str, st
 
 
 async def clear_user_history(user_id: int) -> None:
-    """Удаляет всю историю диалога пользователя."""
     async with aiosqlite.connect(DB_NAME) as conn:
         await conn.execute("DELETE FROM chat_history WHERE user_id = ?", (user_id,))
         await conn.commit()
 
 
 # -------------------------------------------------------------------
-# ТЕСТ БЕКА
+# ТЕСТ БЕКА (без изменений)
 # -------------------------------------------------------------------
 async def save_bdi_result(user_id: int, score: int, interpretation: str) -> None:
-    """Сохраняет результат теста Бека."""
     async with aiosqlite.connect(DB_NAME) as conn:
         await conn.execute("""
             INSERT INTO bdi_results (user_id, date, score, interpretation)
@@ -175,7 +150,6 @@ async def save_bdi_result(user_id: int, score: int, interpretation: str) -> None
 
 
 async def get_user_bdi_results(user_id: int, limit: int = 10) -> List[Dict]:
-    """Возвращает последние результаты теста Бека."""
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("""
             SELECT date, score, interpretation FROM bdi_results
@@ -190,87 +164,91 @@ async def get_user_bdi_results(user_id: int, limit: int = 10) -> List[Dict]:
 
 
 # -------------------------------------------------------------------
-# БАЛАНС СООБЩЕНИЙ
+# ПОДПИСКИ (НОВАЯ МОДЕЛЬ)
 # -------------------------------------------------------------------
-async def get_balance(user_id: int) -> int:
-    """Возвращает текущий баланс сообщений пользователя."""
-    async with aiosqlite.connect(DB_NAME) as conn:
-        cursor = await conn.execute(
-            "SELECT balance FROM message_limits WHERE user_id = ?",
-            (user_id,)
-        )
-        row = await cursor.fetchone()
-        return row[0] if row else 0
-
-
-async def decrement_balance(user_id: int) -> int:
+async def activate_subscription(user_id: int, days: int) -> None:
     """
-    Уменьшает баланс пользователя на 1, если он > 0.
-    Возвращает новый баланс.
+    Активирует Premium-подписку на указанное количество дней.
+    Если подписка уже есть – добавляет дни к текущему expires_at.
     """
+    expires_at = datetime.now() + timedelta(days=days)
     async with aiosqlite.connect(DB_NAME) as conn:
         await conn.execute("""
-            UPDATE message_limits SET balance = balance - 1
-            WHERE user_id = ? AND balance > 0
+            INSERT INTO subscriptions (user_id, is_premium, expires_at)
+            VALUES (?, 1, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                is_premium = 1,
+                expires_at = datetime(expires_at, '+' || ? || ' days')
+        """, (user_id, expires_at, days))
+        await conn.commit()
+
+
+async def is_premium_active(user_id: int) -> bool:
+    """
+    Проверяет, активна ли Premium-подписка у пользователя.
+    Возвращает True, если is_premium = 1 и expires_at > текущего времени.
+    """
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute("""
+            SELECT is_premium, expires_at FROM subscriptions WHERE user_id = ?
+        """, (user_id,))
+        row = await cursor.fetchone()
+        if not row:
+            return False
+        is_premium, expires_at = row
+        if not is_premium:
+            return False
+        if expires_at:
+            try:
+                exp = datetime.fromisoformat(expires_at)
+                if exp < datetime.now():
+                    # Подписка истекла – деактивируем
+                    await deactivate_subscription(user_id)
+                    return False
+            except ValueError:
+                pass
+        return True
+
+
+async def deactivate_subscription(user_id: int) -> None:
+    """Деактивирует подписку пользователя (is_premium = 0)."""
+    async with aiosqlite.connect(DB_NAME) as conn:
+        await conn.execute("""
+            UPDATE subscriptions SET is_premium = 0 WHERE user_id = ?
         """, (user_id,))
         await conn.commit()
-        return await get_balance(user_id)
 
 
-async def try_decrement_balance(user_id: int) -> Tuple[bool, int]:
+async def get_subscription_days_left(user_id: int) -> int | None:
     """
-    Проверяет, что баланс > 0, и если да – уменьшает на 1 атомарно.
-    Возвращает (True, new_balance) или (False, current_balance).
+    Возвращает количество дней, оставшихся до конца подписки.
+    Если подписка неактивна или отсутствует, возвращает None.
     """
     async with aiosqlite.connect(DB_NAME) as conn:
-        await conn.execute("BEGIN IMMEDIATE")
+        cursor = await conn.execute("""
+            SELECT is_premium, expires_at FROM subscriptions WHERE user_id = ?
+        """, (user_id,))
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        is_premium, expires_at = row
+        if not is_premium or not expires_at:
+            return None
         try:
-            cursor = await conn.execute(
-                "SELECT balance FROM message_limits WHERE user_id = ?",
-                (user_id,)
-            )
-            row = await cursor.fetchone()
-            if not row:
-                await conn.commit()
-                return False, 0
-            balance = row[0]
-            if balance <= 0:
-                await conn.commit()
-                return False, balance
-            await conn.execute(
-                "UPDATE message_limits SET balance = balance - 1 WHERE user_id = ?",
-                (user_id,)
-            )
-            await conn.commit()
-            return True, balance - 1
-        except Exception:
-            await conn.rollback()
-            raise
-
-
-async def has_balance(user_id: int) -> bool:
-    """Проверяет, есть ли у пользователя сообщения на балансе (>0)."""
-    balance = await get_balance(user_id)
-    return balance > 0
-
-
-async def add_balance(user_id: int, amount: int) -> int:
-    """Добавляет указанное количество сообщений на баланс пользователя."""
-    async with aiosqlite.connect(DB_NAME) as conn:
-        await conn.execute("""
-            INSERT INTO message_limits (user_id, balance)
-            VALUES (?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET balance = balance + ?
-        """, (user_id, amount, amount))
-        await conn.commit()
-        return await get_balance(user_id)
+            exp = datetime.fromisoformat(expires_at)
+            now = datetime.now()
+            if exp < now:
+                await deactivate_subscription(user_id)
+                return None
+            return (exp - now).days
+        except ValueError:
+            return None
 
 
 # -------------------------------------------------------------------
-# СУММАРИЗАЦИЯ
+# СУММАРИЗАЦИЯ (без изменений)
 # -------------------------------------------------------------------
 async def save_summary(user_id: int, start_msg_id: int, end_msg_id: int, summary_text: str) -> None:
-    """Сохраняет суммаризацию диалога."""
     async with aiosqlite.connect(DB_NAME) as conn:
         await conn.execute("""
             INSERT INTO summaries (user_id, start_message_id, end_message_id, summary_text, created_at)
@@ -280,7 +258,6 @@ async def save_summary(user_id: int, start_msg_id: int, end_msg_id: int, summary
 
 
 async def get_all_summaries(user_id: int) -> List[str]:
-    """Возвращает все суммаризации пользователя в хронологическом порядке."""
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("""
             SELECT summary_text FROM summaries
@@ -292,10 +269,6 @@ async def get_all_summaries(user_id: int) -> List[str]:
 
 
 async def get_messages_for_summary(user_id: int, limit: int = 30) -> Tuple[List[Dict], int, int]:
-    """
-    Возвращает последние N сообщений для создания суммаризации.
-    Возвращает: (messages, start_id, end_id)
-    """
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("""
             SELECT id, role, content FROM chat_history
@@ -315,7 +288,6 @@ async def get_messages_for_summary(user_id: int, limit: int = 30) -> Tuple[List[
 
 
 async def count_user_messages(user_id: int) -> int:
-    """Общее количество сообщений пользователя (роль 'user')."""
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("""
             SELECT COUNT(*) FROM chat_history
@@ -329,7 +301,6 @@ async def count_user_messages(user_id: int) -> int:
 # СТАТИСТИКА (ДЛЯ АДМИН-ПАНЕЛИ)
 # -------------------------------------------------------------------
 async def get_total_users() -> int:
-    """Возвращает общее количество уникальных пользователей (из chat_history)."""
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("SELECT COUNT(DISTINCT user_id) FROM chat_history")
         row = await cursor.fetchone()
@@ -337,7 +308,6 @@ async def get_total_users() -> int:
 
 
 async def get_active_users_today() -> int:
-    """Возвращает количество пользователей, отправивших сообщения сегодня."""
     today = date.today().isoformat()
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("""
@@ -349,7 +319,6 @@ async def get_active_users_today() -> int:
 
 
 async def get_total_messages_today() -> int:
-    """Возвращает общее количество сообщений за сегодня."""
     today = date.today().isoformat()
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("""
@@ -361,7 +330,6 @@ async def get_total_messages_today() -> int:
 
 
 async def get_all_user_ids() -> List[int]:
-    """Возвращает список всех уникальных user_id для рассылки (из таблицы users)."""
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("SELECT user_id FROM users")
         rows = await cursor.fetchall()
@@ -372,10 +340,6 @@ async def get_all_user_ids() -> List[int]:
 # ПРОФИЛИ ПОЛЬЗОВАТЕЛЕЙ
 # -------------------------------------------------------------------
 async def save_user_profile(user_id: int, telegram_name: str, custom_name: str | None, username: str | None) -> None:
-    """
-    Сохраняет или обновляет профиль пользователя (включая username).
-    custom_name может быть None (при первом сохранении).
-    """
     async with aiosqlite.connect(DB_NAME) as conn:
         await conn.execute("""
             INSERT INTO users (user_id, telegram_name, custom_name, username)
@@ -389,7 +353,6 @@ async def save_user_profile(user_id: int, telegram_name: str, custom_name: str |
 
 
 async def get_user_custom_name(user_id: int) -> str | None:
-    """Возвращает сохранённое имя пользователя."""
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute(
             "SELECT custom_name FROM users WHERE user_id = ?", (user_id,)
@@ -399,10 +362,6 @@ async def get_user_custom_name(user_id: int) -> str | None:
 
 
 async def get_all_users(limit: int = 50, offset: int = 0) -> List[Dict]:
-    """
-    Возвращает список пользователей с пагинацией.
-    Явно указываем порядок полей: user_id, telegram_name, custom_name, created_at, username.
-    """
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("""
             SELECT user_id, telegram_name, custom_name, created_at, username
@@ -424,7 +383,6 @@ async def get_all_users(limit: int = 50, offset: int = 0) -> List[Dict]:
 
 
 async def get_total_users_count() -> int:
-    """Общее количество записей в таблице users."""
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("SELECT COUNT(*) FROM users")
         row = await cursor.fetchone()
@@ -436,7 +394,7 @@ async def get_user_info(user_id: int) -> dict:
     Возвращает подробную информацию о пользователе:
     - telegram_name, username, created_at (из таблицы users)
     - total_messages (из chat_history)
-    - balance (из message_limits)
+    - subscription_status (из subscriptions)
     """
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("""
@@ -458,22 +416,22 @@ async def get_user_info(user_id: int) -> dict:
         total_row = await cursor.fetchone()
         total_messages = total_row[0] if total_row else 0
 
-    balance = await get_balance(user_id)
+    # Получаем информацию о подписке
+    days_left = await get_subscription_days_left(user_id)
+    is_premium = days_left is not None
+
     return {
         "user_id": user_id,
         "telegram_name": telegram_name,
         "username": username,
         "created_at": created_at,
         "total_messages": total_messages,
-        "balance": balance
+        "is_premium": is_premium,
+        "days_left": days_left
     }
 
 
 async def search_users(query: str) -> List[Dict]:
-    """
-    Ищет пользователей только по ID (точное совпадение числа).
-    Возвращает список словарей с ключами user_id, telegram_name, custom_name, username.
-    """
     async with aiosqlite.connect(DB_NAME) as conn:
         try:
             user_id = int(query)
@@ -502,10 +460,6 @@ async def search_users(query: str) -> List[Dict]:
 # РЕФЕРАЛЬНАЯ СИСТЕМА
 # -------------------------------------------------------------------
 async def add_referral(inviter_id: int, invited_id: int) -> bool:
-    """
-    Сохраняет связь пригласитель–приглашённый, если приглашённый ещё не был зарегистрирован.
-    Возвращает True, если запись добавлена (новый реферал).
-    """
     async with aiosqlite.connect(DB_NAME) as conn:
         try:
             await conn.execute("""
@@ -519,7 +473,6 @@ async def add_referral(inviter_id: int, invited_id: int) -> bool:
 
 
 async def get_referral_count(inviter_id: int) -> int:
-    """Возвращает количество приглашённых пользователей."""
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("""
             SELECT COUNT(*) FROM referrals WHERE inviter_id = ?
@@ -529,9 +482,6 @@ async def get_referral_count(inviter_id: int) -> int:
 
 
 async def has_pending_referral_bonus(invited_id: int) -> bool:
-    """
-    Проверяет, есть ли для приглашённого пользователя невыплаченный бонус.
-    """
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("""
             SELECT inviter_id FROM referrals
@@ -542,7 +492,6 @@ async def has_pending_referral_bonus(invited_id: int) -> bool:
 
 
 async def mark_referral_bonus_given(invited_id: int) -> None:
-    """Отмечает, что бонус пригласившему начислен."""
     async with aiosqlite.connect(DB_NAME) as conn:
         await conn.execute("""
             UPDATE referrals SET bonus_given = 1 WHERE invited_id = ?
@@ -551,7 +500,6 @@ async def mark_referral_bonus_given(invited_id: int) -> None:
 
 
 async def get_inviter_id(invited_id: int) -> int | None:
-    """Возвращает ID пригласившего для данного приглашённого."""
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("""
             SELECT inviter_id FROM referrals WHERE invited_id = ?
@@ -561,13 +509,9 @@ async def get_inviter_id(invited_id: int) -> int | None:
 
 
 # -------------------------------------------------------------------
-# СЕССИИ (ПОДСЧЁТ КОЛИЧЕСТВА ДИАЛОГОВ)
+# СЕССИИ (ОСТАВЛЕНЫ, НО В ЛК НЕ ОТОБРАЖАЮТСЯ)
 # -------------------------------------------------------------------
 async def start_session(user_id: int) -> int:
-    """
-    Начинает новую сессию для пользователя.
-    Возвращает ID созданной сессии.
-    """
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("""
             INSERT INTO sessions (user_id, started_at)
@@ -580,10 +524,6 @@ async def start_session(user_id: int) -> int:
 
 
 async def end_session(session_id: int, message_count: int = 0) -> None:
-    """
-    Завершает сессию, устанавливая ended_at и количество сообщений.
-    Если message_count = 0, сессия удаляется как несостоявшаяся.
-    """
     if message_count > 0:
         async with aiosqlite.connect(DB_NAME) as conn:
             await conn.execute("""
@@ -599,7 +539,6 @@ async def end_session(session_id: int, message_count: int = 0) -> None:
 
 
 async def increment_session_message_count(session_id: int) -> None:
-    """Увеличивает счётчик сообщений в активной сессии на 1."""
     async with aiosqlite.connect(DB_NAME) as conn:
         await conn.execute("""
             UPDATE sessions SET message_count = message_count + 1
@@ -609,7 +548,6 @@ async def increment_session_message_count(session_id: int) -> None:
 
 
 async def get_session_message_count(session_id: int) -> int:
-    """Возвращает текущее количество сообщений в сессии."""
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("SELECT message_count FROM sessions WHERE id = ?", (session_id,))
         row = await cursor.fetchone()
@@ -617,41 +555,10 @@ async def get_session_message_count(session_id: int) -> int:
 
 
 async def get_total_sessions(user_id: int) -> int:
-    """Возвращает общее количество завершённых сессий пользователя."""
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("""
             SELECT COUNT(*) FROM sessions
             WHERE user_id = ? AND ended_at IS NOT NULL
         """, (user_id,))
-        row = await cursor.fetchone()
-        return row[0] if row else 0
-
-
-# -------------------------------------------------------------------
-# ГЛОБАЛЬНЫЙ СЧЁТЧИК СООБЩЕНИЙ ИИ (ДЛЯ ЛИМИТА 500)
-# -------------------------------------------------------------------
-async def increment_global_message_count() -> int:
-    """
-    Увеличивает глобальный счётчик сообщений ИИ на 1 и возвращает новое значение.
-    Если запись 'total_ai_messages' отсутствует, она создаётся со значением 1.
-    """
-    async with aiosqlite.connect(DB_NAME) as conn:
-        await conn.execute("""
-            INSERT INTO global_stats (key, value) VALUES ('total_ai_messages', 1)
-            ON CONFLICT(key) DO UPDATE SET value = value + 1
-        """)
-        await conn.commit()
-        cursor = await conn.execute("SELECT value FROM global_stats WHERE key = 'total_ai_messages'")
-        row = await cursor.fetchone()
-        return row[0] if row else 0
-
-
-async def get_global_message_count() -> int:
-    """
-    Возвращает текущее значение глобального счётчика сообщений ИИ.
-    Если записи нет, возвращает 0.
-    """
-    async with aiosqlite.connect(DB_NAME) as conn:
-        cursor = await conn.execute("SELECT value FROM global_stats WHERE key = 'total_ai_messages'")
         row = await cursor.fetchone()
         return row[0] if row else 0

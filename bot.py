@@ -1,8 +1,6 @@
 # bot.py
 # Главный файл запуска Telegram-бота «AI-психолог».
-# Добавлен запрос имени пользователя при первом запуске и сохранение username.
-# Реализована реферальная система с бонусами.
-# Настроено логирование в консоль и в файл bot_public.log.
+# Версия 4.0.0 – переход на модель подписки по времени (Premium).
 
 import asyncio
 import os
@@ -18,7 +16,8 @@ from handlers.dialog_handlers import register_dialog_handlers
 from handlers.profile_handlers import router as profile_router
 from handlers.admin import router as admin_router
 from database import (
-    init_db, save_user_profile, add_balance, get_balance,
+    init_db, save_user_profile,
+    activate_subscription, is_premium_active, get_subscription_days_left,
     add_referral, has_pending_referral_bonus, mark_referral_bonus_given, get_inviter_id,
     get_total_users_count   # для уведомлений о юбилейных регистрациях
 )
@@ -26,29 +25,24 @@ from database import (
 # -------------------------------------------------------------------
 # НАСТРОЙКА ЛОГИРОВАНИЯ (КОНСОЛЬ + ФАЙЛ)
 # -------------------------------------------------------------------
-# Создаём корневой логгер
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# Форматтер для единообразного вывода
 formatter = logging.Formatter(
     "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 
-# Обработчик для вывода в консоль
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
-# Обработчик для записи в файл (для публичного мониторинга)
 file_handler = logging.FileHandler("bot_public.log", encoding="utf-8")
 file_handler.setLevel(logging.INFO)
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
-# Получаем логгер для этого модуля (будет наследовать настройки корневого)
 logger = logging.getLogger(__name__)
 
 # -------------------------------------------------------------------
@@ -71,7 +65,6 @@ dp = Dispatcher()
 # -------------------------------------------------------------------
 @dp.errors()
 async def errors_handler(_: types.Update, exception: Exception):
-    """Ловит все необработанные исключения и логирует их."""
     logger.exception("Критическая ошибка при обработке обновления", exc_info=exception)
     return True
 
@@ -84,28 +77,27 @@ class NameState(StatesGroup):
 
 
 # -------------------------------------------------------------------
-# ЕДИНАЯ ФУНКЦИЯ СПРАВКИ
+# ЕДИНАЯ ФУНКЦИЯ СПРАВКИ (ОБНОВЛЕНО ДЛЯ ПОДПИСКИ)
 # -------------------------------------------------------------------
 def get_help_text() -> str:
-    """Возвращает текст с информацией о боте (версия 3.3.0)."""
+    """Возвращает текст с информацией о боте (версия 4.0.0)."""
     return (
         "🤖 **• AI-психолог •**\n"
-        "Версия: **3.3.0**\n\n"
+        "Версия: **4.0.0**\n\n"
         "AI-психолог — это виртуальный помощник для поддержки ментального благополучия. "
         "Бот использует технологии искусственного интеллекта, чтобы выслушать, "
         "помочь разобраться в чувствах и предложить полезные техники.\n\n"
         "✨ **Актуальные возможности:**\n"
-        "• 💬 **Начать сессию** — беседа с ИИ-психологом (расход баланса)\n"
-        "• 👤 **Личный кабинет** — баланс, статистика сессий, история тестов\n"
-        "• 🎁 **Пригласи друга** — получайте +100 сообщений за каждого друга\n"
+        "• 💬 **Начать сессию** — беседа с ИИ-психологом (требуется Premium)\n"
+        "• 👤 **Личный кабинет** — статус подписки, история тестов\n"
+        "• 🎁 **Пригласи друга** — получайте +10 дней Premium за каждого друга\n"
         "• 🧠 **Контекст диалога** — запоминание предыдущих бесед\n"
         "• 🆘 **Кризис-детектор** — распознавание тревожных фраз\n\n"
         "🚧 **В планах:**\n"
         "• 📋 Тест на уровень депрессии (шкала Бека)\n"
-        "• 🛒 Покупка сообщений\n\n"
+        "• 🛒 Покупка Premium\n\n"
         "⚠️ **Важно:** бот не заменяет профессионального психолога. "
-        "При серьёзных проблемах необходимо обратиться к специалисту.\n\n"
-        "📊 **Тестовый режим:** лимит 500 сообщений ИИ."
+        "При серьёзных проблемах необходимо обратиться к специалисту."
     )
 
 
@@ -151,20 +143,16 @@ async def cmd_start(message: types.Message, state: FSMContext, command: CommandO
 
 
 # -------------------------------------------------------------------
-# ОБРАБОТЧИК ВВОДА ИМЕНИ (НАЧИСЛЕНИЕ БАЛАНСА, БОНУСОВ, УВЕДОМЛЕНИЕ АДМИНОВ)
+# ОБРАБОТЧИК ВВОДА ИМЕНИ (АКТИВАЦИЯ ПОДПИСКИ И РЕФЕРАЛЬНЫХ БОНУСОВ)
 # -------------------------------------------------------------------
 @dp.message(NameState.waiting_for_name)
 async def process_name(message: types.Message, state: FSMContext):
     """
     После ввода имени:
       - Обновляет custom_name.
-      - Если баланс равен 0 (первая регистрация), начисляет стартовые сообщения:
-          * без реферала: 20
-          * по реферальной ссылке: 100 (вместо 20)
-      - Если пользователь был приглашён и бонус ещё не выплачен:
-          * начисляет пригласившему 100 сообщений
-          * отмечает бонус как выданный.
-      - Отправляет уведомление администраторам о юбилейных регистрациях (1-5, 10, 20...).
+      - Активирует пробный период (5 дней) или реферальный бонус (10 дней).
+      - Начисляет реферальный бонус пригласившему (10 дней).
+      - Отправляет уведомление администраторам о юбилейных регистрациях.
     """
     user_name = message.text.strip()
     if len(user_name) > 50:
@@ -180,24 +168,25 @@ async def process_name(message: types.Message, state: FSMContext):
 
     user_id = message.from_user.id
 
-    # --- НАЧИСЛЕНИЕ СТАРТОВОГО БАЛАНСА (только если баланс равен 0) ---
-    current_balance = await get_balance(user_id)
-    if current_balance == 0:
-        inviter_id = await get_inviter_id(user_id)
-        if inviter_id is not None:
-            await add_balance(user_id, 100)
-            logger.info(f"100 стартовых сообщений начислено пользователю {user_id} (реферал)")
-        else:
-            await add_balance(user_id, 20)
-            logger.info(f"20 стартовых сообщений начислено пользователю {user_id}")
+    # --- АКТИВАЦИЯ ПРОБНОГО ПЕРИОДА ИЛИ РЕФЕРАЛЬНОГО БОНУСА ---
+    inviter_id = await get_inviter_id(user_id)
+    if inviter_id is not None:
+        # Пользователь пришёл по реферальной ссылке – даём 10 дней (пробные 5 не даём)
+        await activate_subscription(user_id, 10)
+        logger.info(f"10 дней Premium начислено приглашённому пользователю {user_id}")
+    else:
+        # Обычная регистрация – пробные 5 дней, если подписка ещё не активна
+        if not await is_premium_active(user_id):
+            await activate_subscription(user_id, 5)
+            logger.info(f"Пробные 5 дней Premium активированы для пользователя {user_id}")
 
-    # --- ПРОВЕРКА РЕФЕРАЛЬНОГО БОНУСА ДЛЯ ПРИГЛАСИВШЕГО ---
+    # --- РЕФЕРАЛЬНЫЙ БОНУС ДЛЯ ПРИГЛАСИВШЕГО (10 дней) ---
     if await has_pending_referral_bonus(user_id):
         inviter_id = await get_inviter_id(user_id)
         if inviter_id:
-            await add_balance(inviter_id, 100)
+            await activate_subscription(inviter_id, 10)
             await mark_referral_bonus_given(user_id)
-            logger.info(f"Бонус 100 сообщений начислен пользователю {inviter_id} за приглашение {user_id}")
+            logger.info(f"Бонусные 10 дней Premium начислены пригласившему {inviter_id} за {user_id}")
 
     # --- УВЕДОМЛЕНИЕ АДМИНИСТРАТОРАМ О ЮБИЛЕЙНЫХ РЕГИСТРАЦИЯХ ---
     total_users = await get_total_users_count()
@@ -275,7 +264,7 @@ async def main():
     await init_db()
     logger.info("База данных инициализирована")
     logger.info("=" * 55)
-    logger.info("        🤖 AI-ПСИХОЛОГ v3.3.0")
+    logger.info("        🤖 AI-ПСИХОЛОГ v4.0.0 (Premium-подписка)")
     logger.info("=" * 55)
     logger.info("📡 СТАТУС СИСТЕМЫ:")
     logger.info("  ✅ Бот успешно запущен")
@@ -283,17 +272,16 @@ async def main():
     logger.info("  ✅ База данных SQLite (aiosqlite) инициализирована")
     logger.info("  ✅ Логирование в файл bot_public.log настроено")
     logger.info("🎯 АКТИВНЫЕ ФУНКЦИИ:")
-    logger.info("  💬 Начать сессию — диалог с ИИ (расход баланса)")
-    logger.info("  👤 Личный кабинет — баланс, сессии, история тестов, рефералы")
-    logger.info("  🎁 Реферальная система (+100 сообщений за друга)")
+    logger.info("  💬 Начать сессию — диалог с ИИ (требуется Premium)")
+    logger.info("  👤 Личный кабинет — статус подписки, история тестов")
+    logger.info("  🎁 Реферальная система (+10 дней Premium за друга)")
     logger.info("  🧠 Контекст и суммаризация")
     logger.info("  🆘 Кризис-детектор")
     logger.info("  ℹ️  Информация о боте")
     logger.info("  🔧 Админ-панель (управление пользователями, рассылка)")
-    logger.info("  ⚠️ Глобальный лимит: 500 сообщений ИИ (тестовый режим)")
     logger.info("🚧 В РАЗРАБОТКЕ:")
     logger.info("  📋 Тест на депрессию (шкала Бека)")
-    logger.info("  🛒 Покупка сообщений")
+    logger.info("  🛒 Покупка Premium")
     logger.info("=" * 55)
     logger.info("⏳ Ожидание входящих сообщений...")
     await dp.start_polling(bot)
