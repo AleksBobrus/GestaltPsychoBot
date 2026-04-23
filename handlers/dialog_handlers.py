@@ -99,7 +99,7 @@ async def process_dialog(message: types.Message, state: FSMContext):
             await message.answer(
                 "😔 *Ваша подписка завершена.*\n"
                 "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                "Чтобы продолжить, оформите подписку в Личном кабинете → Купить.",
+                "Чтобы продолжить, оформите подписку в Личном кабинете → Продлить подписку.",
                 reply_markup=dialog_kb,
                 parse_mode="Markdown"
             )
@@ -107,7 +107,7 @@ async def process_dialog(message: types.Message, state: FSMContext):
             await message.answer(
                 "😔 *Ваша подписка завершена.*\n"
                 "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                "Чтобы продолжить, оформите подписку в Личном кабинете → Купить.",
+                "Чтобы продолжить, оформите подписку в Личном кабинете → Продлить подписку.",
                 reply_markup=dialog_kb,
                 parse_mode="Markdown"
             )

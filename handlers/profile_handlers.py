@@ -23,7 +23,7 @@ def get_profile_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text="📜 История тестов", callback_data="profile_tests")],
         [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="profile_invite")],
-        [InlineKeyboardButton(text="🛒 Купить", callback_data="profile_purchases")],
+        [InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="profile_renew_subscription")],
         [InlineKeyboardButton(text="🔙 Главное меню", callback_data="profile_back_to_main")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -208,9 +208,9 @@ async def profile_invite(callback: types.CallbackQuery):
 # -------------------------------------------------------------------
 # ЗАГЛУШКИ ОСТАЛЬНЫХ КНОПОК
 # -------------------------------------------------------------------
-@router.callback_query(F.data == "profile_purchases")
-async def profile_purchases(callback: types.CallbackQuery):
-    await callback.answer("🛒 Возможность покупки Premium появится в будущем.", show_alert=True)
+@router.callback_query(F.data == "profile_renew_subscription")
+async def profile_renew_subscription(callback: types.CallbackQuery):
+    await callback.answer("🔄 Возможность продления подписки появится в будущем.", show_alert=True)
 
 
 @router.callback_query(F.data == "profile_back_to_main")
