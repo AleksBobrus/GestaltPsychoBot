@@ -309,7 +309,7 @@ async def user_info_callback(callback: types.CallbackQuery):
         [InlineKeyboardButton(text="🔄 Активировать на 10 дней", callback_data=f"user_add_premium_ask:{user_id}:10")],
         [InlineKeyboardButton(text="🔄 Активировать на 20 дней", callback_data=f"user_add_premium_ask:{user_id}:20")],
         [InlineKeyboardButton(text="🔄 Активировать на 30 дней", callback_data=f"user_add_premium_ask:{user_id}:30")],
-        [InlineKeyboardButton(text="🚫 Отключить Premium", callback_data=f"user_deactivate_premium_ask:{user_id}")],
+        [InlineKeyboardButton(text="🚫 Отключить подписку", callback_data=f"user_deactivate_premium_ask:{user_id}")],
         [InlineKeyboardButton(text="🔙 Назад к списку", callback_data="admin_users_menu")]
     ])
 
@@ -333,7 +333,7 @@ async def user_add_premium_ask(callback: types.CallbackQuery):
     days = int(days_str)
     await callback.answer()
     await callback.message.edit_text(
-        f"⚠️ *Активировать Premium на {days} дней для пользователя {user_id}?*",
+        f"⚠️ *Активировать подписку на {days} дней для пользователя {user_id}?*",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [
@@ -353,7 +353,7 @@ async def user_add_premium_confirm(callback: types.CallbackQuery):
     user_id = int(user_id_str)
     days = int(days_str)
     await activate_subscription(user_id, days)
-    await callback.answer(f"✅ Premium активирован на {days} дней", show_alert=True)
+    await callback.answer(f"✅ Подписка активирована на {days} дней", show_alert=True)
     await user_info_callback(callback)
 
 
@@ -368,7 +368,7 @@ async def user_deactivate_premium_ask(callback: types.CallbackQuery):
     user_id = int(callback.data.split(":")[1])
     await callback.answer()
     await callback.message.edit_text(
-        f"⚠️ *Отключить Premium для пользователя {user_id}?*",
+        f"⚠️ *Отключить подписку для пользователя {user_id}?*",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [
@@ -386,7 +386,7 @@ async def user_deactivate_premium_confirm(callback: types.CallbackQuery):
         return
     user_id = int(callback.data.split(":")[1])
     await deactivate_subscription(user_id)
-    await callback.answer("✅ Premium отключён", show_alert=True)
+    await callback.answer("✅ Подписка отключена", show_alert=True)
     await user_info_callback(callback)
 
 
