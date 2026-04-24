@@ -206,11 +206,42 @@ async def profile_invite(callback: types.CallbackQuery):
 
 
 # -------------------------------------------------------------------
-# ЗАГЛУШКИ ОСТАЛЬНЫХ КНОПОК
+# ПРОДЛЕНИЕ ПОДПИСКИ
 # -------------------------------------------------------------------
 @router.callback_query(F.data == "profile_renew_subscription")
 async def profile_renew_subscription(callback: types.CallbackQuery):
-    await callback.answer("🔄 Возможность продления подписки появится в будущем.", show_alert=True)
+    await callback.answer()
+
+    text = (
+        "🔄 **Продление подписки**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "📋 *Тарифы:*\n"
+        "• 5 дней – 50 ⭐️ (≈100₽)\n"
+        "• 10 дней – 100 ⭐️ (≈200₽)\n"
+        "• 20 дней – 200 ⭐️ (≈400₽)\n"
+        "• 30 дней – 300 ⭐️ (≈600₽)\n\n"
+        "⚠️ *Раздел находится в разработке.*\n"
+        "Оплата станет доступна в ближайшее время.\n\n"
+        "Выберите способ оплаты:"
+    )
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⭐️ Оплатить звёздами", callback_data="pay_stars")],
+        [InlineKeyboardButton(text="💳 Оплатить картой", callback_data="pay_card")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="profile_back_from_tests")]
+    ])
+
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
+
+
+# Заглушки для кнопок оплаты (пока раздел в разработке)
+@router.callback_query(F.data == "pay_stars")
+async def pay_stars_stub(callback: types.CallbackQuery):
+    await callback.answer("⭐️ Оплата звёздами появится позже.", show_alert=True)
+
+@router.callback_query(F.data == "pay_card")
+async def pay_card_stub(callback: types.CallbackQuery):
+    await callback.answer("💳 Оплата картой появится позже.", show_alert=True)
 
 
 @router.callback_query(F.data == "profile_back_to_main")
