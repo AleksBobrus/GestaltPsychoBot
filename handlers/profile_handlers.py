@@ -1,7 +1,7 @@
 # handlers/profile_handlers.py
 # Личный кабинет пользователя: статус подписки, история тестов (тест Бернса),
 # приглашение друга, продление подписки.
-# Версия 4.1.1 – тест Бернса вместо теста Бека.
+# Версия 4.1.1 – кнопка «Пройти тест» удалена из истории тестов.
 
 import logging
 from aiogram import Router, types, F
@@ -38,9 +38,9 @@ def get_profile_keyboard() -> InlineKeyboardMarkup:
 def get_tests_keyboard() -> InlineKeyboardMarkup:
     """
     Инлайн-клавиатура для раздела истории тестов.
+    Кнопка «Пройти тест» удалена – теперь только «Назад».
     """
     buttons = [
-        [InlineKeyboardButton(text="📋 Пройти тест", callback_data="profile_start_test")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="profile_back_from_tests")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -135,10 +135,7 @@ async def profile_tests(callback: types.CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data == "profile_start_test")
-async def profile_start_test(callback: types.CallbackQuery):
-    """Заглушка для запуска теста Бернса."""
-    await callback.answer("📋 Функция прохождения теста Бернса появится в ближайшее время.", show_alert=True)
+# Старый обработчик profile_start_test удалён – кнопка «Пройти тест» больше не используется
 
 
 @router.callback_query(F.data == "profile_back_from_tests")
