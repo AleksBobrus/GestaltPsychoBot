@@ -1,7 +1,7 @@
 # bot.py
 # Главный файл запуска Telegram-бота «AI-психолог».
 # Версия 4.1.1 – подписка по времени + глобальный счётчик сообщений ИИ (тестовый режим).
-# Тест на депрессию теперь по шкале Бернса (25 вопросов).
+# Подключён модуль теста Бернса (25 вопросов) + реферальная система + админ-панель.
 
 import asyncio
 import os
@@ -14,6 +14,7 @@ from keyboards import get_main_menu
 from handlers.dialog_handlers import register_dialog_handlers
 from handlers.profile_handlers import router as profile_router
 from handlers.admin import router as admin_router
+from handlers.depression_test import router as depression_router  # <-- тест Бернса
 # Платёжный роутер пока не подключён, будет добавлен позже
 # from handlers.payments import router as payments_router
 from database import (
@@ -85,9 +86,9 @@ def get_help_text() -> str:
         "🏠 • *Личный кабинет* — статус подписки, история тестов\n"
         "💌 • *Пригласи друга* — +10 дней подписки за каждого друга\n"
         "🧠 • *Контекст диалога* — помню предыдущие беседы\n"
-        "🆘 • *Кризис-детектор* — распознаю тревожные фразы\n\n"
+        "🆘 • *Кризис-детектор* — распознаю тревожные фразы\n"
+        "📋 • *Тест на депрессию* — шкала Бернса (25 вопросов)\n\n"
         "🚧 **В планах:**\n"
-        "📋 • Тест на уровень депрессии (шкала Бернса)\n"
         "🛒 • Продление подписки\n\n"
         "⚠️ *Бот не заменяет профессионального психолога.*\n"
         "При серьёзных проблемах обратитесь к специалисту."
@@ -212,13 +213,7 @@ async def about_bot(message: types.Message, state: FSMContext):
     await message.answer(get_help_text(), parse_mode="Markdown", reply_markup=get_main_menu(message.from_user.id))
 
 
-@dp.message(F.text == "📋 Пройти тест")
-async def placeholder_test(message: types.Message, state: FSMContext):
-    await state.clear()
-    await message.answer(
-        "🛠 Тест на уровень депрессии (шкала Бернса) будет доступен в следующей версии.",
-        reply_markup=get_main_menu(message.from_user.id)
-    )
+# Старая заглушка для теста удалена – теперь используется модуль depression_router
 
 
 # -------------------------------------------------------------------
@@ -227,6 +222,7 @@ async def placeholder_test(message: types.Message, state: FSMContext):
 register_dialog_handlers(dp)
 dp.include_router(profile_router)
 dp.include_router(admin_router)
+dp.include_router(depression_router)   # <-- тест Бернса
 # Платёжный роутер будет подключён позже
 # dp.include_router(payments_router)
 
@@ -250,10 +246,10 @@ async def main():
     logger.info("  💌 Реферальная система (+10 дней подписки за друга)")
     logger.info("  🧠 Контекст и суммаризация")
     logger.info("  🆘 Кризис-детектор")
+    logger.info("  📋 Тест на депрессию (шкала Бернса, 25 вопросов)")
     logger.info("  ℹ️  Информация о боте")
     logger.info("  🔧 Админ-панель (управление пользователями, рассылка)")
     logger.info("🚧 В РАЗРАБОТКЕ:")
-    logger.info("  📋 Тест на депрессию (шкала Бернса)")
     logger.info("  🛒 Продление подписки")
     logger.info("═" * 55)
     logger.info("⏳ Ожидание входящих сообщений...")
