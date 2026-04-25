@@ -1,13 +1,16 @@
 # handlers/depression_test.py
 # Модуль для прохождения теста на депрессию (шкала Бернса, 25 вопросов).
 # Использует FSM (конечный автомат) для последовательного опроса.
+# Перед началом теста показывается ознакомительное окно с кнопками «Приступить» и «Отмена».
+# После каждого ответа сообщение с вопросом удаляется, чтобы не засорять чат.
 
 import logging
 from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from database import save_depression_result  # функция сохранения результата
+from keyboards import get_main_menu
+from database import save_depression_result
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -92,19 +95,77 @@ def check_crisis_answers(answers: list) -> bool:
 
 
 # -------------------------------------------------------------------
-# ЗАПУСК ТЕСТА (ВХОДНАЯ ТОЧКА)
+# ЗАПУСК ТЕСТА – ТЕПЕРЬ С ПОДТВЕРЖДЕНИЕМ
 # -------------------------------------------------------------------
 @router.message(F.text == "📋 Пройти тест")
 async def start_test(message: types.Message, state: FSMContext):
-    """Начинает тест, задавая первый вопрос."""
-    # Сбрасываем состояние перед началом
-    await state.clear()
-    # Сохраняем в состояние: текущий индекс вопроса и накопленные баллы
+    """
+    Показывает приглашение пройти тест Бернса.
+    Пользователь может согласиться или отказаться.
+    """
+    await state.clear()  # на всякий случай сбрасываем предыдущее состояние
+
+    text = (
+        "📋 **Тест на уровень депрессии (шкала Бернса)**\n\n"
+        "Вам будет задано 25 вопросов. На каждый вопрос нужно ответить, "
+        "насколько часто вы испытывали описанное состояние в течение последней недели.\n\n"
+        "Варианты ответов: от 0 (ни разу) до 4 (очень часто).\n\n"
+        "После завершения теста вы получите интерпретацию результата.\n\n"
+        "⚠️ *Тест не является диагнозом и не заменяет консультацию специалиста.*\n"
+        "Если вы испытываете серьёзные трудности, обратитесь к психологу или психотерапевту."
+    )
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Приступить", callback_data="start_test_confirm")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="start_test_cancel")]
+    ])
+
+    await message.answer(text, parse_mode="Markdown", reply_markup=keyboard)
+
+
+# -------------------------------------------------------------------
+# ОБРАБОТКА КНОПКИ «ПРИСТУПИТЬ»
+# -------------------------------------------------------------------
+@router.callback_query(F.data == "start_test_confirm")
+async def confirm_test(callback: types.CallbackQuery, state: FSMContext):
+    """Начинает тест после подтверждения."""
+    # Удаляем пригласительное сообщение
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass  # если не удалось удалить – ничего страшного
+    await callback.answer()
+
+    # Инициализируем состояние теста
+    await state.set_state(DepressionTest.answering)
     await state.update_data(question_index=0, answers=[])
+
     # Отправляем первый вопрос
-    await send_question(message, state)
+    await send_question(callback.message, state)
 
 
+# -------------------------------------------------------------------
+# ОБРАБОТКА КНОПКИ «ОТМЕНА»
+# -------------------------------------------------------------------
+@router.callback_query(F.data == "start_test_cancel")
+async def cancel_test(callback: types.CallbackQuery, state: FSMContext):
+    """Отменяет тест и возвращает главное меню."""
+    await state.clear()
+    # Удаляем пригласительное сообщение
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.answer()
+    await callback.message.answer(
+        "",  # пустой текст
+        reply_markup=get_main_menu(callback.from_user.id)
+    )
+
+
+# -------------------------------------------------------------------
+# ОТПРАВКА ТЕКУЩЕГО ВОПРОСА
+# -------------------------------------------------------------------
 async def send_question(message: types.Message, state: FSMContext):
     """Отправляет текущий вопрос с вариантами ответов."""
     data = await state.get_data()
@@ -139,7 +200,7 @@ async def send_question(message: types.Message, state: FSMContext):
 # -------------------------------------------------------------------
 @router.callback_query(F.data.startswith("depr_answer:"))
 async def process_answer(callback: types.CallbackQuery, state: FSMContext):
-    """Обрабатывает выбор варианта ответа."""
+    """Обрабатывает выбор варианта ответа и удаляет сообщение с вопросом."""
     # Извлекаем данные из callback_data
     parts = callback.data.split(":")
     question_index = int(parts[1])
@@ -157,9 +218,13 @@ async def process_answer(callback: types.CallbackQuery, state: FSMContext):
     # Отвечаем на callback, чтобы Telegram убрал "часики"
     await callback.answer()
 
+    # Удаляем сообщение с текущим вопросом, чтобы не засорять чат
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass  # если удаление не удалось, продолжаем
+
     # Отправляем следующий вопрос или показываем результат
-    # Для этого используем сообщение, к которому прикреплена клавиатура
-    await callback.message.edit_reply_markup()  # убираем старую клавиатуру
     await send_question(callback.message, state)
 
 
@@ -187,10 +252,8 @@ async def show_result(message: types.Message, state: FSMContext):
     )
     if crisis:
         result_text += (
-            "⚠️ **Вы дали положительный ответ на один или несколько вопросов "
-            "о суицидальных мыслях.**\n"
-            "Пожалуйста, немедленно обратитесь за профессиональной помощью!\n"
-            "📞 **Телефон доверия:** 8-800-2000-122 (бесплатно, 24/7)\n\n"
+            "⚠️ **Ваши ответы требуют внимания специалиста.**\n"
+            "Рекомендуем обратиться к психологу или психотерапевту для профессиональной оценки.\n\n"
         )
     result_text += "Спасибо за прохождение теста."
 
