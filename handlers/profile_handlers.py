@@ -1,6 +1,7 @@
 # handlers/profile_handlers.py
-# Личный кабинет пользователя: статус подписки, история тестов, приглашение друга, продление подписки.
-# Версия 4.1.1 – чистый интерфейс без разделителей и изображений.
+# Личный кабинет пользователя: статус подписки, история тестов (тест Бернса),
+# приглашение друга, продление подписки.
+# Версия 4.1.1 – тест Бернса вместо теста Бека.
 
 import logging
 from aiogram import Router, types, F
@@ -11,8 +12,10 @@ from aiogram.types import (
 )
 from keyboards import get_main_menu
 from database import (
-    get_user_info, get_user_bdi_results,
-    get_referral_count, get_subscription_days_left
+    get_user_info,
+    get_user_depression_results,   # <-- новая функция для теста Бернса
+    get_referral_count,
+    get_subscription_days_left
 )
 
 logger = logging.getLogger(__name__)
@@ -50,7 +53,7 @@ def get_tests_keyboard() -> InlineKeyboardMarkup:
 async def profile_main(message: types.Message, state: FSMContext):
     """
     Открывает главное меню личного кабинета.
-    Отображает статус подписки и оставшиеся дни.
+    Отображает статус подписки и оставшиеся дни, а также последний результат теста Бернса.
     """
     await state.clear()
     user_id = message.from_user.id
@@ -63,17 +66,18 @@ async def profile_main(message: types.Message, state: FSMContext):
         )
         return
 
+    # Получаем последний результат теста Бернса
     try:
-        test_results = await get_user_bdi_results(user_id, limit=1)
+        test_results = await get_user_depression_results(user_id, limit=1)
     except Exception as e:
         logger.warning(f"Ошибка получения тестов для {user_id}: {e}")
         test_results = []
 
     if test_results:
         last_test = test_results[0]
-        test_line = f"📋 Тест Бека: {last_test['score']} баллов ({last_test['interpretation']})"
+        test_line = f"📋 Тест Бернса: {last_test['score']} баллов ({last_test['interpretation']})"
     else:
-        test_line = "📋 Тест Бека: не пройден"
+        test_line = "📋 Тест Бернса: не пройден"
 
     # Получаем статус подписки
     days_left = await get_subscription_days_left(user_id)
@@ -98,11 +102,11 @@ async def profile_main(message: types.Message, state: FSMContext):
 # -------------------------------------------------------------------
 @router.callback_query(F.data == "profile_tests")
 async def profile_tests(callback: types.CallbackQuery):
-    """Показывает историю пройденных тестов Бека (с защитой от пустого текста)."""
+    """Показывает историю пройденных тестов Бернса (с защитой от пустого текста)."""
     user_id = callback.from_user.id
 
     try:
-        results = await get_user_bdi_results(user_id, limit=5)
+        results = await get_user_depression_results(user_id, limit=5)
     except Exception as e:
         logger.warning(f"Не удалось получить историю тестов для {user_id}: {e}")
         results = []
@@ -133,8 +137,8 @@ async def profile_tests(callback: types.CallbackQuery):
 
 @router.callback_query(F.data == "profile_start_test")
 async def profile_start_test(callback: types.CallbackQuery):
-    """Заглушка для запуска теста Бека."""
-    await callback.answer("📋 Функция прохождения теста появится в ближайшее время.", show_alert=True)
+    """Заглушка для запуска теста Бернса."""
+    await callback.answer("📋 Функция прохождения теста Бернса появится в ближайшее время.", show_alert=True)
 
 
 @router.callback_query(F.data == "profile_back_from_tests")
@@ -148,15 +152,15 @@ async def profile_back_from_tests(callback: types.CallbackQuery):
         return
 
     try:
-        test_results = await get_user_bdi_results(user_id, limit=1)
+        test_results = await get_user_depression_results(user_id, limit=1)
     except Exception:   # noqa
         test_results = []
 
     if test_results:
         last_test = test_results[0]
-        test_line = f"📋 Тест Бека: {last_test['score']} баллов ({last_test['interpretation']})"
+        test_line = f"📋 Тест Бернса: {last_test['score']} баллов ({last_test['interpretation']})"
     else:
-        test_line = "📋 Тест Бека: не пройден"
+        test_line = "📋 Тест Бернса: не пройден"
 
     days_left = await get_subscription_days_left(user_id)
     if days_left is not None:
@@ -249,8 +253,9 @@ async def pay_card_stub(callback: types.CallbackQuery):
 @router.callback_query(F.data == "profile_back_to_main")
 async def profile_back_to_main(callback: types.CallbackQuery):
     await callback.message.delete()
+    # Отправляем пустое сообщение с главным меню (клавиатурой)
     await callback.message.answer(
-        "", # пустой текст
+        "",  # пустой текст
         reply_markup=get_main_menu(callback.from_user.id)
     )
     await callback.answer()

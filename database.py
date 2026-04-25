@@ -1,7 +1,7 @@
 # database.py
 # Асинхронный модуль для работы с SQLite (aiosqlite).
-# Хранит историю диалогов, тест Бека, подписки, суммаризации, профили,
-# рефералов, сессии и глобальный счётчик сообщений ИИ (тестовый режим).
+# Хранит историю диалогов, тест на депрессию (шкала Бернса), подписки, суммаризации,
+# профили, рефералов, сессии и глобальный счётчик сообщений ИИ (тестовый режим).
 
 import aiosqlite
 from datetime import datetime, date, timedelta
@@ -15,8 +15,8 @@ DB_NAME = "dialog_history.db"
 async def init_db() -> None:
     """
     Создаёт все необходимые таблицы, если их ещё нет.
-    Старые таблицы message_limits и global_stats (если были) останутся,
-    но новые версии будут созданы заново при необходимости.
+    Таблица bdi_results (тест Бека) больше не используется,
+    вместо неё создаётся depression_results (тест Бернса).
     """
     async with aiosqlite.connect(DB_NAME) as conn:
         # Таблица истории диалогов (сообщения пользователя и ИИ)
@@ -32,9 +32,10 @@ async def init_db() -> None:
         # Индекс для быстрого поиска по пользователю
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON chat_history(user_id)")
 
-        # Таблица результатов теста Бека (опросник депрессии)
+        # Таблица результатов теста на депрессию (шкала Бернса)
+        # Заменяет старую таблицу bdi_results (тест Бека)
         await conn.execute("""
-            CREATE TABLE IF NOT EXISTS bdi_results (
+            CREATE TABLE IF NOT EXISTS depression_results (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
                 date TIMESTAMP,
@@ -42,7 +43,7 @@ async def init_db() -> None:
                 interpretation TEXT
             )
         """)
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_bdi_user_id ON bdi_results(user_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_depr_user_id ON depression_results(user_id)")
 
         # Таблица суммаризаций (выжимки истории диалогов)
         await conn.execute("""
@@ -68,7 +69,7 @@ async def init_db() -> None:
             )
         """)
 
-        # МИГРАЦИЯ: добавляем столбец username, если его ещё нет (для старых БД)
+        # МИГРАЦИЯ: добавляем столбец username, если он отсутствует (для старых БД)
         cursor = await conn.execute("PRAGMA table_info(users)")
         columns = await cursor.fetchall()
         column_names = [col[1] for col in columns]
@@ -120,7 +121,7 @@ async def init_db() -> None:
 
 
 # -------------------------------------------------------------------
-# ИСТОРИЯ ДИАЛОГОВ
+# ИСТОРИЯ ДИАЛОГОВ (без изменений)
 # -------------------------------------------------------------------
 async def save_message(user_id: int, role: str, content: str) -> None:
     """Сохраняет одно сообщение (пользователя или ассистента) в историю."""
@@ -155,23 +156,23 @@ async def clear_user_history(user_id: int) -> None:
 
 
 # -------------------------------------------------------------------
-# ТЕСТ БЕКА
+# ТЕСТ НА ДЕПРЕССИЮ (ШКАЛА БЕРНСА) – НОВАЯ ВЕРСИЯ
 # -------------------------------------------------------------------
-async def save_bdi_result(user_id: int, score: int, interpretation: str) -> None:
-    """Сохраняет результат теста Бека."""
+async def save_depression_result(user_id: int, score: int, interpretation: str) -> None:
+    """Сохраняет результат теста на депрессию (шкала Бернса)."""
     async with aiosqlite.connect(DB_NAME) as conn:
         await conn.execute("""
-            INSERT INTO bdi_results (user_id, date, score, interpretation)
+            INSERT INTO depression_results (user_id, date, score, interpretation)
             VALUES (?, ?, ?, ?)
         """, (user_id, datetime.now(), score, interpretation))
         await conn.commit()
 
 
-async def get_user_bdi_results(user_id: int, limit: int = 10) -> List[Dict]:
-    """Возвращает последние N результатов теста Бека для пользователя."""
+async def get_user_depression_results(user_id: int, limit: int = 10) -> List[Dict]:
+    """Возвращает последние N результатов теста на депрессию для пользователя."""
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute("""
-            SELECT date, score, interpretation FROM bdi_results
+            SELECT date, score, interpretation FROM depression_results
             WHERE user_id = ?
             ORDER BY date DESC LIMIT ?
         """, (user_id, limit))
@@ -182,8 +183,11 @@ async def get_user_bdi_results(user_id: int, limit: int = 10) -> List[Dict]:
         ]
 
 
+# --- Старые функции теста Бека удалены ---
+
+
 # -------------------------------------------------------------------
-# ПОДПИСКИ (PREMIUM-ДОСТУП)
+# ПОДПИСКИ (PREMIUM-ДОСТУП) – без изменений
 # -------------------------------------------------------------------
 async def activate_subscription(user_id: int, days: int) -> None:
     """Активирует или продлевает подписку на указанное количество дней."""
@@ -215,7 +219,6 @@ async def is_premium_active(user_id: int) -> bool:
             try:
                 exp = datetime.fromisoformat(expires_at)
                 if exp < datetime.now():
-                    # Подписка истекла — деактивируем
                     await deactivate_subscription(user_id)
                     return False
             except ValueError:
@@ -256,7 +259,7 @@ async def get_subscription_days_left(user_id: int) -> int | None:
 
 
 # -------------------------------------------------------------------
-# СУММАРИЗАЦИЯ
+# СУММАРИЗАЦИЯ (без изменений)
 # -------------------------------------------------------------------
 async def save_summary(user_id: int, start_msg_id: int, end_msg_id: int, summary_text: str) -> None:
     """Сохраняет суммаризацию для указанного диапазона сообщений."""
@@ -315,7 +318,7 @@ async def count_user_messages(user_id: int) -> int:
 
 
 # -------------------------------------------------------------------
-# СТАТИСТИКА ДЛЯ АДМИН-ПАНЕЛИ
+# СТАТИСТИКА ДЛЯ АДМИН-ПАНЕЛИ (без изменений)
 # -------------------------------------------------------------------
 async def get_total_users() -> int:
     """Возвращает количество уникальных пользователей, когда-либо отправлявших сообщения."""
@@ -358,7 +361,7 @@ async def get_all_user_ids() -> List[int]:
 
 
 # -------------------------------------------------------------------
-# ПРОФИЛИ ПОЛЬЗОВАТЕЛЕЙ
+# ПРОФИЛИ ПОЛЬЗОВАТЕЛЕЙ (без изменений)
 # -------------------------------------------------------------------
 async def save_user_profile(user_id: int, telegram_name: str, custom_name: str | None, username: str | None) -> None:
     """Сохраняет или обновляет профиль пользователя (имя, username)."""
@@ -477,7 +480,7 @@ async def search_users(query: str) -> List[Dict]:
 
 
 # -------------------------------------------------------------------
-# РЕФЕРАЛЬНАЯ СИСТЕМА
+# РЕФЕРАЛЬНАЯ СИСТЕМА (без изменений)
 # -------------------------------------------------------------------
 async def add_referral(inviter_id: int, invited_id: int) -> bool:
     """Добавляет реферальную связь. Возвращает True, если добавлена."""
@@ -534,7 +537,7 @@ async def get_inviter_id(invited_id: int) -> int | None:
 
 
 # -------------------------------------------------------------------
-# СЕССИИ (ПОДСЧЁТ ДИАЛОГОВ)
+# СЕССИИ (ПОДСЧЁТ ДИАЛОГОВ) – без изменений
 # -------------------------------------------------------------------
 async def start_session(user_id: int) -> int:
     """Начинает новую сессию, возвращает её ID."""
