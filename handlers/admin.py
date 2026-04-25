@@ -18,7 +18,7 @@ from database import (
     get_all_users, get_total_users_count,
     search_users,
     activate_subscription, deactivate_subscription, get_subscription_days_left,
-    reset_global_message_counter   # <-- новая функция сброса глобального счётчика
+    reset_global_message_counter
 )
 
 logger = logging.getLogger(__name__)
@@ -71,7 +71,7 @@ class SearchState(StatesGroup):
 
 
 # -------------------------------------------------------------------
-# ГЛАВНОЕ МЕНЮ АДМИН-ПАНЕЛИ (СВОДКА)
+# ГЛАВНОЕ МЕНЮ АДМИН-ПАНЕЛИ (СВОДКА) – БЕЗ РАЗДЕЛИТЕЛЕЙ
 # -------------------------------------------------------------------
 @router.message(F.text == "🔧 Админ-панель")
 async def admin_panel(message: types.Message, state: FSMContext):
@@ -88,8 +88,7 @@ async def admin_panel(message: types.Message, state: FSMContext):
     purchases_today = 0  # заглушка
 
     stats_text = (
-        "🔧 **Админ-панель**\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "🔧 **Админ-панель**\n\n"
         "📊 **Сводка на сегодня:**\n"
         f"👥 Всего пользователей: **{total_users}**\n"
         f"📅 Активных сегодня: **{active_today}**\n"
@@ -336,7 +335,7 @@ async def show_user_list_new_message(message: types.Message, page: int = 0):
 
 
 # -------------------------------------------------------------------
-# ИНФОРМАЦИЯ О ПОЛЬЗОВАТЕЛЕ (С УПРАВЛЕНИЕМ ПОДПИСКОЙ)
+# ИНФОРМАЦИЯ О ПОЛЬЗОВАТЕЛЕ (С УПРАВЛЕНИЕМ ПОДПИСКОЙ) – БЕЗ РАЗДЕЛИТЕЛЕЙ
 # -------------------------------------------------------------------
 @router.callback_query(F.data.startswith("user_info:"))
 async def user_info_callback(callback: types.CallbackQuery):
@@ -359,14 +358,12 @@ async def user_info_callback(callback: types.CallbackQuery):
         sub_status = "❌ Не активна"
 
     text = (
-        f"👤 **Информация о пользователе**\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👤 **Информация о пользователе**\n\n"
         f"ID: **{user_id}**\n"
         f"Имя: *{safe_display_name}*\n"
         f"🚀 Регистрация: {reg_date}\n"
         f"💬 Всего сообщений: **{info['total_messages']}**\n"
         f"⏳ Подписка: {sub_status}\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -526,7 +523,7 @@ async def process_broadcast(message: types.Message, state: FSMContext, bot: Bot)
 
 
 # -------------------------------------------------------------------
-# ВСПОМОГАТЕЛЬНЫЕ КОМАНДЫ
+# ВСПОМОГАТЕЛЬНЫЕ КОМАНДЫ – БЕЗ РАЗДЕЛИТЕЛЕЙ
 # -------------------------------------------------------------------
 @router.callback_query(F.data == "admin_back_to_panel")
 async def back_to_panel(callback: types.CallbackQuery):
@@ -543,8 +540,7 @@ async def back_to_panel(callback: types.CallbackQuery):
     purchases_today = 0
 
     stats_text = (
-        "🔧 **Админ-панель**\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "🔧 **Админ-панель**\n\n"
         "📊 **Сводка на сегодня:**\n"
         f"👥 Всего пользователей: **{total_users}**\n"
         f"📅 Активных сегодня: **{active_today}**\n"
@@ -553,11 +549,15 @@ async def back_to_panel(callback: types.CallbackQuery):
         "Выберите действие:"
     )
 
-    await callback.message.edit_text(
-        stats_text,
-        parse_mode="Markdown",
-        reply_markup=get_admin_keyboard()
-    )
+    try:
+        await callback.message.edit_text(
+            stats_text,
+            parse_mode="Markdown",
+            reply_markup=get_admin_keyboard()
+        )
+    except Exception as e:
+        if "message is not modified" not in str(e):
+            logger.error(f"Ошибка при возврате в панель: {e}")
 
 
 @router.callback_query(F.data == "admin_close")
@@ -567,7 +567,10 @@ async def admin_close_callback(callback: types.CallbackQuery):
         await callback.answer("⛔ Доступ запрещён.", show_alert=True)
         return
     await callback.answer()
-    await callback.message.delete()
+    try:
+        await callback.message.delete()
+    except Exception:   # noqa
+        pass  # сообщение уже удалено или недоступно
 
 
 # -------------------------------------------------------------------

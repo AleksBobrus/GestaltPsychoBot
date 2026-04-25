@@ -1,11 +1,14 @@
 # handlers/profile_handlers.py
-# Личный кабинет пользователя: статус Premium-подписки, история тестов, приглашение друга, покупка.
-# Версия 4.0.0 – отображение дней подписки вместо баланса сообщений.
+# Личный кабинет пользователя: статус подписки, история тестов, приглашение друга, продление подписки.
+# Версия 4.1.1 – чистый интерфейс без разделителей и изображений.
 
 import logging
 from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CopyTextButton
+from aiogram.types import (
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    CopyTextButton
+)
 from keyboards import get_main_menu
 from database import (
     get_user_info, get_user_bdi_results,
@@ -47,7 +50,7 @@ def get_tests_keyboard() -> InlineKeyboardMarkup:
 async def profile_main(message: types.Message, state: FSMContext):
     """
     Открывает главное меню личного кабинета.
-    Отображает статус Premium-подписки и оставшиеся дни.
+    Отображает статус подписки и оставшиеся дни.
     """
     await state.clear()
     user_id = message.from_user.id
@@ -72,19 +75,18 @@ async def profile_main(message: types.Message, state: FSMContext):
     else:
         test_line = "📋 Тест Бека: не пройден"
 
-    # Получаем статус Premium-подписки
+    # Получаем статус подписки
     days_left = await get_subscription_days_left(user_id)
     if days_left is not None:
         sub_text = f"✅ Активна (осталось {days_left} дн.)"
     else:
         sub_text = "❌ Не активна"
 
+    # Текст без разделителей и изображений
     text = (
-        "🏠 **Личный кабинет**\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "🏠 **Личный кабинет**\n\n"
         f"{test_line}\n\n"
-        f"⏳ *Подписка:* {sub_text}\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"⏳ *Подписка:* {sub_text}\n\n"
         "Выберите действие:"
     )
 
@@ -96,7 +98,7 @@ async def profile_main(message: types.Message, state: FSMContext):
 # -------------------------------------------------------------------
 @router.callback_query(F.data == "profile_tests")
 async def profile_tests(callback: types.CallbackQuery):
-    """Показывает историю пройденных тестов Бека."""
+    """Показывает историю пройденных тестов Бека (с защитой от пустого текста)."""
     user_id = callback.from_user.id
 
     try:
@@ -106,16 +108,9 @@ async def profile_tests(callback: types.CallbackQuery):
         results = []
 
     if not results:
-        text = (
-            "📜 **История тестов**\n"
-            "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Пока вы не прошли ни одного теста."
-        )
+        text = "📜 **История тестов**\n\nПока вы не прошли ни одного теста."
     else:
-        lines = [
-            "📜 **История тестов**\n"
-            "━━━━━━━━━━━━━━━━━━━━━━\n"
-        ]
+        lines = ["📜 **История тестов**\n"]
         for r in results:
             date_str = r['date'][:10] if 'date' in r else 'неизвестно'
             score = r.get('score', '?')
@@ -123,7 +118,16 @@ async def profile_tests(callback: types.CallbackQuery):
             lines.append(f"📅 {date_str}: *{score} баллов* – {interpretation}")
         text = "\n".join(lines)
 
-    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=get_tests_keyboard())
+    # Гарантируем, что text не пустой
+    if not text or not text.strip():
+        text = "📜 **История тестов**\n\nНет данных для отображения."
+
+    try:
+        await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=get_tests_keyboard())
+    except Exception: # noqa
+        # fallback без Markdown
+        await callback.message.edit_text(text, reply_markup=get_tests_keyboard())
+
     await callback.answer()
 
 
@@ -160,12 +164,11 @@ async def profile_back_from_tests(callback: types.CallbackQuery):
     else:
         sub_text = "❌ Не активна"
 
+    # Текст без разделителей и изображений
     text = (
-        "🏠 **Личный кабинет**\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "🏠 **Личный кабинет**\n\n"
         f"{test_line}\n\n"
-        f"⏳ *Подписка:* {sub_text}\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"⏳ *Подписка:* {sub_text}\n\n"
         "Выберите действие:"
     )
 
@@ -183,9 +186,9 @@ async def profile_invite(callback: types.CallbackQuery):
     ref_link = f"https://t.me/{bot_username}?start=ref{user_id}"
     count = await get_referral_count(user_id)
 
+    # Текст без разделителей
     text = (
-        "💌 **Пригласи друга**\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "💌 **Пригласи друга**\n\n"
         f"🔗 *Ваша персональная ссылка:*\n`{ref_link}`\n\n"
         f"👥 Приглашено: *{count}*\n\n"
         "🎉 **Бонусы:**\n"
@@ -213,8 +216,7 @@ async def profile_renew_subscription(callback: types.CallbackQuery):
     await callback.answer()
 
     text = (
-        "🔄 **Продление подписки**\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "🔄 **Продление подписки**\n\n"
         "📋 *Тарифы:*\n"
         "• 5 дней – 50 ⭐️ (≈100₽)\n"
         "• 10 дней – 100 ⭐️ (≈200₽)\n"

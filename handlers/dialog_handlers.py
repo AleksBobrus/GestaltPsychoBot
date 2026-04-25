@@ -1,6 +1,6 @@
 # handlers/dialog_handlers.py
 # Обработчики режима диалога с ИИ-психологом.
-# Версия 4.1.1 – возвращён глобальный счётчик сообщений ИИ (тестовый режим, лимит 800).
+# Версия 4.1.1 – чистый интерфейс без изображений-разделителей.
 
 import logging
 import os
@@ -16,7 +16,7 @@ from database import (
     count_user_messages, get_messages_for_summary, save_summary, get_all_summaries,
     start_session, end_session, increment_session_message_count, get_session_message_count,
     is_premium_active,
-    increment_global_message_count, get_global_message_count   # <-- ДОБАВЛЕНЫ
+    increment_global_message_count, get_global_message_count
 )
 from crisis_detector import detect_crisis, get_crisis_response
 
@@ -35,7 +35,7 @@ class DialogState(StatesGroup):
 
 
 # -------------------------------------------------------------------
-# ВХОД В ДИАЛОГ
+# ВХОД В ДИАЛОГ (без изображений)
 # -------------------------------------------------------------------
 async def start_talk(message: types.Message, state: FSMContext):
     await state.set_state(DialogState.waiting_for_message)
@@ -43,9 +43,9 @@ async def start_talk(message: types.Message, state: FSMContext):
     session_id = await start_session(message.from_user.id)
     await state.update_data(session_id=session_id)
 
+    # Обычное текстовое приветствие, без изображений и разделителей
     await message.answer(
-        "🌿 **Начало сессии** 🌿\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "🌿 **Начало сессии** 🌿\n\n"
         "💬 *Вы можете:*\n"
         "• Написать «Хочу поговорить о…» и поделиться тем, что беспокоит.\n"
         "• Попросить напомнить, о чём мы беседовали в прошлые разы.\n"
@@ -97,8 +97,7 @@ async def process_dialog(message: types.Message, state: FSMContext):
     # ---------- 1. ПРОВЕРКА ПОДПИСКИ ----------
     if not await is_premium_active(user_id):
         await message.answer(
-            "😔 *Ваша подписка завершена.*\n"
-            "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "😔 *Ваша подписка завершена.*\n\n"
             "Чтобы продолжить, оформите подписку в Личном кабинете → Продлить подписку.",
             reply_markup=dialog_kb,
             parse_mode="Markdown"

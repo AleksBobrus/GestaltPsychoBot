@@ -1,6 +1,7 @@
 # bot.py
 # Главный файл запуска Telegram-бота «AI-психолог».
 # Версия 4.1.1 – подписка по времени + глобальный счётчик сообщений ИИ (тестовый режим).
+# Интерфейс без изображений-разделителей и текстовых разделителей.
 
 import asyncio
 import os
@@ -13,6 +14,8 @@ from keyboards import get_main_menu
 from handlers.dialog_handlers import register_dialog_handlers
 from handlers.profile_handlers import router as profile_router
 from handlers.admin import router as admin_router
+# Платёжный роутер пока не подключён, будет добавлен позже
+# from handlers.payments import router as payments_router
 from database import (
     init_db, save_user_profile,
     activate_subscription, is_premium_active,
@@ -60,7 +63,7 @@ dp = Dispatcher()
 
 
 # -------------------------------------------------------------------
-# ГЛОБАЛЬНЫЙ ОБРАБОТЧИК ОШИБОК
+# ГЛОБАЛЬНЫЙ ОБРАБОТЧИК ОШИБОК (ПРИНИМАЕТ ДВА АРГУМЕНТА: update И exception)
 # -------------------------------------------------------------------
 @dp.errors()
 async def errors_handler(_: types.Update, exception: Exception):
@@ -70,13 +73,12 @@ async def errors_handler(_: types.Update, exception: Exception):
 
 
 # -------------------------------------------------------------------
-# ЕДИНАЯ ФУНКЦИЯ СПРАВКИ (иконки обновлены)
+# ЕДИНАЯ ФУНКЦИЯ СПРАВКИ (разделители убраны)
 # -------------------------------------------------------------------
 def get_help_text() -> str:
     return (
         "🤖 **• AI-психолог •**\n"
-        "Версия: **4.1.1**\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Версия: **4.1.1**\n\n"
         "*Виртуальный помощник для поддержки ментального благополучия на базе ИИ.*\n\n"
         "✨ **Что я умею:**\n"
         "💬 • *Начать сессию* — беседа с психологом (требуется подписка)\n"
@@ -87,14 +89,13 @@ def get_help_text() -> str:
         "🚧 **В планах:**\n"
         "📋 • Тест на уровень депрессии (шкала Бека)\n"
         "🛒 • Продление подписки\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
         "⚠️ *Бот не заменяет профессионального психолога.*\n"
         "При серьёзных проблемах обратитесь к специалисту."
     )
 
 
 # -------------------------------------------------------------------
-# ОБРАБОТЧИК КОМАНДЫ /start (БЕЗ ЗАПРОСА ИМЕНИ)
+# ОБРАБОТЧИК КОМАНДЫ /start (БЕЗ ЗАПРОСА ИМЕНИ, БЕЗ ИЗОБРАЖЕНИЙ И РАЗДЕЛИТЕЛЕЙ)
 # -------------------------------------------------------------------
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext, command: CommandObject):
@@ -105,7 +106,7 @@ async def cmd_start(message: types.Message, state: FSMContext, command: CommandO
       - Активирует пробный период (5 дн.) или реферальный бонус (10 дн.).
       - Начисляет бонус пригласившему (10 дн.).
       - Отправляет уведомление админам по гибкой схеме.
-      - Показывает главное меню.
+      - Показывает главное меню (чистый текст, без разделителей).
     """
     await state.clear()
 
@@ -184,14 +185,12 @@ async def cmd_start(message: types.Message, state: FSMContext, command: CommandO
                 except Exception as e:
                     logger.warning(f"Не удалось отправить уведомление админу {admin_id}: {e}")
 
-    # Приветствие и главное меню
+    # --- ПРИВЕТСТВИЕ (ЧИСТЫЙ ТЕКСТ, БЕЗ ИЗОБРАЖЕНИЙ И РАЗДЕЛИТЕЛЕЙ) ---
     await message.answer(
         f"👋 *Привет, {telegram_name}!*\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"⚠️ *Важное предупреждение*\n"
         f"• Я не заменяю профессионального психолога\n"
-        f"• При серьёзных проблемах обратитесь к специалисту\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"• При серьёзных проблемах обратитесь к специалисту\n\n"
         f"💬 *Выберите действие на клавиатуре ниже* 👇",
         parse_mode="Markdown",
         reply_markup=get_main_menu(message.from_user.id)
@@ -226,6 +225,8 @@ async def placeholder_test(message: types.Message, state: FSMContext):
 register_dialog_handlers(dp)
 dp.include_router(profile_router)
 dp.include_router(admin_router)
+# Платёжный роутер будет подключён позже
+# dp.include_router(payments_router)
 
 
 # -------------------------------------------------------------------
