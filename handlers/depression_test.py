@@ -133,7 +133,7 @@ async def confirm_test(callback: types.CallbackQuery, state: FSMContext):
     # Удаляем пригласительное сообщение
     try:
         await callback.message.delete()
-    except Exception:
+    except Exception:   # noqa
         pass  # если не удалось удалить – ничего страшного
     await callback.answer()
 
@@ -155,7 +155,7 @@ async def cancel_test(callback: types.CallbackQuery, state: FSMContext):
     # Удаляем пригласительное сообщение
     try:
         await callback.message.delete()
-    except Exception:
+    except Exception:   # noqa
         pass
     await callback.answer()
     await callback.message.answer(
@@ -229,7 +229,7 @@ async def process_answer(callback: types.CallbackQuery, state: FSMContext):
     # Удаляем сообщение с текущим вопросом, чтобы не засорять чат
     try:
         await callback.message.delete()
-    except Exception:
+    except Exception:   # noqa
         pass  # если удаление не удалось, продолжаем
 
     # Отправляем следующий вопрос или показываем результат
@@ -249,7 +249,7 @@ async def stop_test(callback: types.CallbackQuery, state: FSMContext):
     # Удаляем сообщение с текущим вопросом
     try:
         await callback.message.delete()
-    except Exception:
+    except Exception:   # noqa
         pass
 
     # Очищаем состояние теста
