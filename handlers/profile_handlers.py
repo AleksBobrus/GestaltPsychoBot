@@ -250,7 +250,7 @@ async def pay_card_stub(callback: types.CallbackQuery):
 async def profile_back_to_main(callback: types.CallbackQuery):
     await callback.message.delete()
     await callback.message.answer(
-        "↩️ Возврат в главное меню.",
+        "", # пустой текст
         reply_markup=get_main_menu(callback.from_user.id)
     )
     await callback.answer()
