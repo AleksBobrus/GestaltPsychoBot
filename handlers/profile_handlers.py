@@ -230,7 +230,8 @@ async def profile_renew_subscription(callback: types.CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⭐️ Оплатить звёздами", callback_data="pay_stars")],
-        [InlineKeyboardButton(text="💳 Оплатить картой", callback_data="pay_card")],
+        # Убрана кнопка 💳 Оплатить картой
+        # [InlineKeyboardButton(text="💳 Оплатить картой", callback_data="pay_card")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="profile_back_from_tests")]
     ])
 
@@ -242,9 +243,10 @@ async def profile_renew_subscription(callback: types.CallbackQuery):
 async def pay_stars_stub(callback: types.CallbackQuery):
     await callback.answer("⭐️ Оплата звёздами появится позже.", show_alert=True)
 
-@router.callback_query(F.data == "pay_card")
-async def pay_card_stub(callback: types.CallbackQuery):
-    await callback.answer("💳 Оплата картой появится позже.", show_alert=True)
+# Удалите этот блок полностью:
+# @router.callback_query(F.data == "pay_card")
+# async def pay_card_stub(callback: types.CallbackQuery):
+#     await callback.answer("💳 Оплата картой появится позже.", show_alert=True)
 
 
 @router.callback_query(F.data == "profile_back_to_main")
@@ -252,7 +254,7 @@ async def profile_back_to_main(callback: types.CallbackQuery):
     await callback.message.delete()
     # Отправляем пустое сообщение с главным меню (клавиатурой)
     await callback.message.answer(
-        "",  # пустой текст
+        "...",  # пустой текст
         reply_markup=get_main_menu(callback.from_user.id)
     )
     await callback.answer()
