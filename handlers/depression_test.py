@@ -191,7 +191,7 @@ async def send_question(message: types.Message, state: FSMContext):
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
     await message.answer(
-        f"📋 **Вопрос {idx + 1} из {len(QUESTIONS)}**\n\n{question_text}",
+        f"📋 *Вопрос {idx + 1} из {len(QUESTIONS)}*\n\n{question_text}\n\n⚠️ _тест не ставит диагноз и не заменяет помощь специалиста._",
         parse_mode="Markdown",
         reply_markup=keyboard
     )
