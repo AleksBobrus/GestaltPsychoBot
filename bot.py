@@ -20,7 +20,7 @@ from handlers.depression_test import router as depression_router  # <-- тест
 from database import (
     init_db, save_user_profile,
     activate_subscription, is_premium_active,
-    add_referral, has_pending_referral_bonus, mark_referral_bonus_given, get_inviter_id,
+    add_referral,
     get_total_users_count
 )
 
@@ -120,6 +120,7 @@ async def cmd_start(message: types.Message, state: FSMContext, command: CommandO
 
     # Обработка реферальной ссылки
     args = command.args
+    inviter_id = None   # запомним ID пригласившего, если он есть
     if args and args.startswith("ref"):
         try:
             inviter_id = int(args[3:])
@@ -131,7 +132,7 @@ async def cmd_start(message: types.Message, state: FSMContext, command: CommandO
             pass
 
     # --- АКТИВАЦИЯ ПРОБНОГО ПЕРИОДА ИЛИ РЕФЕРАЛЬНОГО БОНУСА ---
-    inviter_id = await get_inviter_id(user_id)
+
     if inviter_id is not None:
         # Пришёл по реферальной ссылке – получает 10 дней
         await activate_subscription(user_id, 10)
@@ -142,13 +143,16 @@ async def cmd_start(message: types.Message, state: FSMContext, command: CommandO
             await activate_subscription(user_id, 5)
             logger.info(f"Пробные 5 дней подписки активированы для пользователя {user_id}")
 
-    # --- РЕФЕРАЛЬНЫЙ БОНУС ДЛЯ ПРИГЛАСИВШЕГО (10 дней) ---
-    if await has_pending_referral_bonus(user_id):
-        inviter_id = await get_inviter_id(user_id)
-        if inviter_id:
-            await activate_subscription(inviter_id, 10)
-            await mark_referral_bonus_given(user_id)
-            logger.info(f"Бонусные 10 дней подписки начислены пригласившему {inviter_id} за {user_id}")
+        # --- ОТПРАВКА УВЕДОМЛЕНИЯ ПРИГЛАСИВШЕМУ О РЕГИСТРАЦИИ ДРУГА ---
+        if inviter_id is not None:
+            try:
+                await bot.send_message(
+                    inviter_id,
+                    f"🎁 Ваш друг зарегистрировался! Вы получите **+10 дней** подписки, "
+                    f"как только он(а) начнёт диалог с ИИ."
+                )
+            except Exception as e:
+                logger.warning(f"Не удалось отправить уведомление пригласившему {inviter_id}: {e}")
 
     # --- УВЕДОМЛЕНИЕ АДМИНИСТРАТОРАМ (ГИБКАЯ СХЕМА) ---
     total_users = await get_total_users_count()

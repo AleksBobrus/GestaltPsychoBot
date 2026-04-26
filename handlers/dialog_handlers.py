@@ -16,7 +16,11 @@ from database import (
     count_user_messages, get_messages_for_summary, save_summary, get_all_summaries,
     start_session, end_session, increment_session_message_count, get_session_message_count,
     is_premium_active,
-    increment_global_message_count, get_global_message_count
+    increment_global_message_count, get_global_message_count,
+    activate_subscription,      # <-- добавить
+    get_inviter_id,             # <-- добавить
+    has_pending_referral_bonus, # <-- добавить
+    mark_referral_bonus_given   # <-- добавить
 )
 from crisis_detector import detect_crisis, get_crisis_response
 
@@ -128,6 +132,22 @@ async def process_dialog(message: types.Message, state: FSMContext):
             await save_message(user_id, "user", user_text)
             await save_message(user_id, "system", "[CRISIS DETECTED]")
             return
+
+    # ---------- ПРОВЕРКА РЕФЕРАЛЬНОГО БОНУСА ПРИ ПЕРВОМ СООБЩЕНИИ ----------
+    # Если это первое сообщение пользователя и он был приглашён, начисляем бонус пригласившему
+    if await count_user_messages(user_id) == 0:
+        inviter_id = await get_inviter_id(user_id)
+        if inviter_id and await has_pending_referral_bonus(user_id):
+            await activate_subscription(inviter_id, 10)
+            await mark_referral_bonus_given(user_id)
+            logger.info(f"Бонус +10 дней начислен пригласившему {inviter_id} за первое сообщение {user_id}")
+            try:
+                await message.bot.send_message(
+                    inviter_id,
+                    f"✅ Ваш друг начал беседу с ИИ! Вам начислено **+10 дней**."
+                )
+            except Exception as e:
+                logger.warning(f"Не удалось уведомить пригласившего {inviter_id}: {e}")
 
     # ---------- 4. СОХРАНЕНИЕ СООБЩЕНИЯ И СЕССИЯ ----------
     await save_message(user_id, "user", user_text)
