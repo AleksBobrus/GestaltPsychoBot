@@ -238,6 +238,6 @@ async def process_dialog(message: types.Message, state: FSMContext):
 # РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ
 # -------------------------------------------------------------------
 def register_dialog_handlers(dp):
-    dp.message.register(start_talk, F.text == "💬 Начать сессию")
+    dp.message.register(start_talk, F.text == "💬 Начать чат")
     dp.message.register(exit_dialog, DialogState.waiting_for_message, F.text == "❌ Завершить диалог")
     dp.message.register(process_dialog, DialogState.waiting_for_message, F.text)
