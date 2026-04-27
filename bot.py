@@ -16,7 +16,7 @@ from handlers.profile_handlers import router as profile_router
 from handlers.admin import router as admin_router
 from handlers.depression_test import router as depression_router  # <-- тест Бернса
 # Платёжный роутер пока не подключён, будет добавлен позже
-# from handlers.payments import router as payments_router
+from handlers.payments import router as payments_router
 from database import (
     init_db, save_user_profile,
     activate_subscription, is_premium_active,
@@ -228,7 +228,7 @@ dp.include_router(profile_router)
 dp.include_router(admin_router)
 dp.include_router(depression_router)   # <-- тест Бернса
 # Платёжный роутер будет подключён позже
-# dp.include_router(payments_router)
+dp.include_router(payments_router)
 
 
 # -------------------------------------------------------------------

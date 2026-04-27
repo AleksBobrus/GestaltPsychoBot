@@ -238,10 +238,20 @@ async def profile_renew_subscription(callback: types.CallbackQuery):
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
 
 
-# Заглушки для кнопок оплаты (пока раздел в разработке)
 @router.callback_query(F.data == "pay_stars")
-async def pay_stars_stub(callback: types.CallbackQuery):
-    await callback.answer("⭐️ Оплата звёздами появится позже.", show_alert=True)
+async def pay_stars(callback: types.CallbackQuery):
+    """Показывает тарифы и инструкцию по оплате звёздами."""
+    await callback.answer()
+    text = (
+        "⭐️ **Оплата звёздами**\n\n"
+        "Для продления подписки отправьте команду:\n"
+        "• `/buy 5` – 5 дней за 25 ⭐️\n"
+        "• `/buy 10` – 10 дней за 50 ⭐️\n"
+        "• `/buy 20` – 20 дней за 100 ⭐️\n"
+        "• `/buy 30` – 30 дней за 150 ⭐️\n\n"
+        "После отправки команды вам будет выставлен счёт."
+    )
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=get_profile_keyboard())
 
 # Удалите этот блок полностью:
 # @router.callback_query(F.data == "pay_card")
