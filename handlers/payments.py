@@ -1,16 +1,20 @@
 # handlers/payments.py
-# Модуль оплаты через Telegram Stars (XTR). Позволяет пользователям покупать дни подписки.
+# Модуль оплаты через Telegram Stars (XTR).
+# Позволяет пользователям покупать дни подписки как через команды /stars и /buy,
+# так и через кнопки в личном кабинете (с помощью функции create_stars_invoice).
+
 import logging
-from aiogram import Router, types, F
+from aiogram import Router, types, F, Bot
 from aiogram.filters import Command
-from aiogram.types import LabeledPrice, PreCheckoutQuery, Message
+from aiogram.types import LabeledPrice, PreCheckoutQuery, Message, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from database import activate_subscription
 
 logger = logging.getLogger(__name__)
 router = Router()
 
-# Конфигурация тарифов: кол-во дней → цена в Stars
+# Конфигурация тарифов: количество дней → стоимость в Telegram Stars.
+# Словарь используется также в profile_handlers.py для отображения тарифов.
 SUBSCRIPTION_TIERS = {
     5: 25,    # 50 руб.
     10: 50,   # 100 руб.
@@ -18,11 +22,46 @@ SUBSCRIPTION_TIERS = {
     30: 150   # 300 руб.
 }
 
-def get_payment_keyboard(amount: int) -> types.InlineKeyboardMarkup:
+
+def get_payment_keyboard(amount: int) -> InlineKeyboardMarkup:
     """Создаёт клавиатуру с кнопкой оплаты через Telegram Stars."""
     builder = InlineKeyboardBuilder()
     builder.button(text=f"Оплатить {amount} ⭐️", pay=True)
     return builder.as_markup()
+
+
+async def create_stars_invoice(user_id: int, days: int, price: int, bot: Bot) -> bool:
+    """
+    Универсальная функция для создания счёта на оплату Stars.
+    Может вызываться из любого модуля (например, из личного кабинета).
+
+    Аргументы:
+        user_id: Telegram ID пользователя, которому выставляется счёт.
+        days: количество дней подписки.
+        price: стоимость в Stars (целое число).
+
+    Возвращает:
+        True, если счёт успешно отправлен, иначе False.
+    """
+    prices = [LabeledPrice(label="XTR", amount=price)]
+    try:
+        # Получаем текущий экземпляр бота через aiogram
+        await bot.send_invoice(
+            chat_id=user_id,
+            title="Продление подписки AI-психолог",
+            description=f"Доступ на {days} дней",
+            payload=f"sub_{user_id}_{days}",
+            provider_token="",   # для Stars всегда пусто
+            currency="XTR",
+            prices=prices,
+            reply_markup=get_payment_keyboard(price),
+        )
+        logger.info(f"Счёт для пользователя {user_id} на {days} дн. ({price}⭐️) успешно создан")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка создания счёта для {user_id}: {e}")
+        return False
+
 
 # -------------------------------------------------------------------
 # КОМАНДА /stars – показывает доступные тарифы
@@ -37,6 +76,7 @@ async def cmd_stars(message: types.Message):
     text += "Например: `/buy 5` – купить 5 дней за 25 ⭐️."
 
     await message.answer(text, parse_mode="Markdown")
+
 
 # -------------------------------------------------------------------
 # КОМАНДА /buy – создание счёта на оплату
@@ -63,17 +103,11 @@ async def cmd_buy(message: types.Message):
         )
         return
 
-    user_id = message.from_user.id
-    prices = [LabeledPrice(label="XTR", amount=price)]
-    await message.answer_invoice(
-        title="Продление подписки AI-психолог",
-        description=f"Premium-доступ на {days} дней",
-        payload=f"sub_{user_id}_{days}",
-        provider_token="",   # для Stars всегда пусто
-        currency="XTR",
-        prices=prices,
-        reply_markup=get_payment_keyboard(price),
-    )
+    # Используем общую функцию для создания счёта
+    success = await create_stars_invoice(message.from_user.id, days, price, message.bot)
+    if not success:
+        await message.answer("❌ Не удалось создать счёт. Попробуйте позже.")
+
 
 # -------------------------------------------------------------------
 # КОМАНДА /paysupport – обязательная команда поддержки платежей
@@ -87,6 +121,7 @@ async def cmd_paysupport(message: types.Message):
         "Для возврата средств используйте команду /refund (в разработке)."
     )
 
+
 # -------------------------------------------------------------------
 # КОМАНДА /refund – возврат средств (заглушка)
 # -------------------------------------------------------------------
@@ -98,6 +133,7 @@ async def cmd_refund(message: types.Message):
         "Пожалуйста, обратитесь к администратору: @your_support_username."
     )
 
+
 # -------------------------------------------------------------------
 # PRE-CHECKOUT – обязательный обработчик перед оплатой
 # -------------------------------------------------------------------
@@ -105,6 +141,7 @@ async def cmd_refund(message: types.Message):
 async def process_pre_checkout(pre_checkout_query: PreCheckoutQuery):
     """Telegram присылает pre_checkout_query перед открытием окна оплаты. Отвечаем ok=True."""
     await pre_checkout_query.answer(ok=True)
+
 
 # -------------------------------------------------------------------
 # SUCCESSFUL PAYMENT – обработка успешной оплаты

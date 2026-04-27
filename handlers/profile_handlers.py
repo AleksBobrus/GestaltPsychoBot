@@ -1,7 +1,7 @@
 # handlers/profile_handlers.py
 # Личный кабинет пользователя: статус подписки, история тестов (тест Бернса),
-# приглашение друга, продление подписки.
-# Версия 4.1.1 – кнопка «Пройти тест» удалена из истории тестов.
+# приглашение друга, продление подписки через Telegram Stars.
+# Версия 4.1.1 – активирована оплата Stars, удалены старые заглушки.
 
 import logging
 from aiogram import Router, types, F
@@ -13,10 +13,12 @@ from aiogram.types import (
 from keyboards import get_main_menu
 from database import (
     get_user_info,
-    get_user_depression_results,   # <-- новая функция для теста Бернса
+    get_user_depression_results,
     get_referral_count,
     get_subscription_days_left
 )
+# Импорт функций и данных модуля оплаты Stars
+from handlers.payments import SUBSCRIPTION_TIERS, create_stars_invoice
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -135,9 +137,6 @@ async def profile_tests(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# Старый обработчик profile_start_test удалён – кнопка «Пройти тест» больше не используется
-
-
 @router.callback_query(F.data == "profile_back_from_tests")
 async def profile_back_from_tests(callback: types.CallbackQuery):
     """Возвращает из истории тестов в главное меню личного кабинета."""
@@ -210,61 +209,54 @@ async def profile_invite(callback: types.CallbackQuery):
 
 
 # -------------------------------------------------------------------
-# ПРОДЛЕНИЕ ПОДПИСКИ
+# ПРОДЛЕНИЕ ПОДПИСКИ (ОПЛАТА STARS)
 # -------------------------------------------------------------------
 @router.callback_query(F.data == "profile_renew_subscription")
 async def profile_renew_subscription(callback: types.CallbackQuery):
+    """Показывает тарифы для продления подписки через Stars."""
     await callback.answer()
 
     text = (
         "🔄 **Продление подписки**\n\n"
-        "📋 *Тарифы:*\n"
-        "• 5 дней – 25 ⭐️\n"
-        "• 10 дней – 50 ⭐️\n"
-        "• 20 дней – 100 ⭐️\n"
-        "• 30 дней – 150 ⭐️\n\n"
-        "⚠️ *Раздел находится в разработке.*\n"
-        "Оплата станет доступна в ближайшее время.\n\n"
-        "Выберите способ оплаты:"
+        "📋 *Тариф (оплата звёздами):*\n"
+        "Выберите тариф, чтобы сразу получить счёт:"
     )
 
+    # Оставлена только кнопка 30 дней
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⭐️ Оплатить звёздами", callback_data="pay_stars")],
-        # Убрана кнопка 💳 Оплатить картой
-        # [InlineKeyboardButton(text="💳 Оплатить картой", callback_data="pay_card")],
+        [InlineKeyboardButton(text="30 дней – 150 ⭐️", callback_data="buy_stars:30")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="profile_back_from_tests")]
     ])
 
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard)
 
 
-@router.callback_query(F.data == "pay_stars")
-async def pay_stars(callback: types.CallbackQuery):
-    """Показывает тарифы и инструкцию по оплате звёздами."""
-    await callback.answer()
-    text = (
-        "⭐️ **Оплата звёздами**\n\n"
-        "Для продления подписки отправьте команду:\n"
-        "• `/buy 5` – 5 дней за 25 ⭐️\n"
-        "• `/buy 10` – 10 дней за 50 ⭐️\n"
-        "• `/buy 20` – 20 дней за 100 ⭐️\n"
-        "• `/buy 30` – 30 дней за 150 ⭐️\n\n"
-        "После отправки команды вам будет выставлен счёт."
-    )
-    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=get_profile_keyboard())
+@router.callback_query(F.data.startswith("buy_stars:"))
+async def buy_stars_handler(callback: types.CallbackQuery):
+    """Обрабатывает нажатие на кнопку тарифа и выставляет счёт."""
+    days = int(callback.data.split(":")[1])
+    price = SUBSCRIPTION_TIERS.get(days, 0)
+    if price == 0:
+        await callback.answer("❌ Неверный тариф.", show_alert=True)
+        return
 
-# Удалите этот блок полностью:
-# @router.callback_query(F.data == "pay_card")
-# async def pay_card_stub(callback: types.CallbackQuery):
-#     await callback.answer("💳 Оплата картой появится позже.", show_alert=True)
+    # Передаём экземпляр бота (callback.bot) в функцию создания счёта
+    success = await create_stars_invoice(callback.from_user.id, days, price, callback.bot)
+    if success:
+        await callback.answer("Счёт отправлен. Проверьте сообщение ниже.", show_alert=True)
+    else:
+        await callback.answer("❌ Не удалось создать счёт. Попробуйте позже.", show_alert=True)
 
 
+# -------------------------------------------------------------------
+# ВОЗВРАТ В ГЛАВНОЕ МЕНЮ
+# -------------------------------------------------------------------
 @router.callback_query(F.data == "profile_back_to_main")
 async def profile_back_to_main(callback: types.CallbackQuery):
     await callback.message.delete()
-    # Отправляем пустое сообщение с главным меню (клавиатурой)
+    # Отправляем сообщение с клавиатурой главного меню
     await callback.message.answer(
-        "...",  # пустой текст
+        "...",  # минимальный текст, чтобы Telegram не выдавал ошибку
         reply_markup=get_main_menu(callback.from_user.id)
     )
     await callback.answer()
