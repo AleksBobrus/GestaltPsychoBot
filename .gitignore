@@ -7,4 +7,5 @@ __pycache__/
 *.pyc
 .idea/
 .vscode/
-*.log
+*.logcheck_db.py
+analyze_logs.py
